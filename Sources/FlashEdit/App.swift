@@ -189,8 +189,8 @@ struct ContentView: View {
         } detail: {
             if let photo = current {
                 HStack(spacing: 0) {
-                    CompareView(preview: preview, single: single, crop: Binding(get: { current?.params.crop }, set: { v in
-                        library.update(photo.id) { $0.change(.whole) { $0.crop = v } }
+                    CompareView(preview: preview, single: single, params: Binding(get: { current?.params ?? Params() }, set: { v in
+                        library.update(photo.id) { $0.change(.whole) { $0 = v } }
                     }))
                     .id(photo.id)  // each photo opens fitted
                     Divider()

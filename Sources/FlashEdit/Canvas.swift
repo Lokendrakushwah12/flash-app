@@ -1,13 +1,13 @@
-// The canvas: before and after (side by side or after only), zoom and pan, the crop box, and the histogram.
+// The canvas: before and after (side by side or after only), zoom and pan, the crop box, heal spots, masks, and the histogram.
 import AppKit
 import SwiftUI
 
 /// Before and after, zoomed and panned together. Pinch or ⌘= / ⌘− to zoom, hold Space and drag to pan.
-/// In crop mode it shows the whole straightened frame with the crop box over it.
+/// In crop mode it shows the whole straightened frame with the crop box over it; the Heal and Masks tabs draw on the after pane.
 struct CompareView: View {
     let preview: Preview
     let single: Bool  // after only, full width
-    @Binding var crop: [Double]?
+    @Binding var params: Params  // the whole-photo edit: crop, heal spots and masks are drawn and edited here
     @Environment(\.displayScale) private var displayScale
     @State private var holding = false
     @State private var zoom: CGFloat = 1  // 1 = fit
@@ -31,9 +31,10 @@ struct CompareView: View {
         GeometryReader { geo in
             HStack(spacing: 12) {
                 if !onePane { panel("Before", preview.before) }
-                panel(preview.cropMode ? "Crop" : holding ? "Without edits" : onePane ? "Hold to compare" : "After  ·  hold to compare",
-                      holding ? preview.before : preview.after)
-                    .onLongPressGesture(minimumDuration: .infinity, perform: {}, onPressingChanged: { holding = $0 && !space && !preview.cropMode })
+                panel(title, holding ? preview.before : preview.after, tools: true)
+                    .onLongPressGesture(minimumDuration: .infinity, perform: {}, onPressingChanged: {
+                        holding = $0 && !space && [.edit, .chat].contains(preview.tool)  // the other tabs draw on the photo
+                    })
             }
             .highPriorityGesture(pan, including: space && !preview.cropMode ? .all : .subviews)
             .simultaneousGesture(pinch, including: preview.cropMode ? .subviews : .all)
@@ -65,12 +66,21 @@ struct CompareView: View {
         paneSize = CGSize(width: max(1, onePane ? s.width : (s.width - 12) / 2), height: max(1, s.height))
     }
 
-    private func panel(_ title: String, _ img: CGImage?) -> some View {
+    private var title: String {
+        switch preview.tool {
+        case .crop: return "Crop"
+        case .heal: return "Heal  ·  click a blemish, drag over a longer one"
+        case .masks: return "Masks"
+        default: return holding ? "Without edits" : onePane ? "Hold to compare" : "After  ·  hold to compare"
+        }
+    }
+
+    private func panel(_ title: String, _ img: CGImage?, tools: Bool = false) -> some View {
         ZStack {
             if let img {
                 Image(decorative: img, scale: 1).resizable().interpolation(.high)
                     .frame(width: fit.width * zoom, height: fit.height * zoom)
-                    .overlay { if preview.cropMode { CropOverlay(crop: $crop, size: fit, aspect: preview.cropAspect, frameAspect: fit.width / max(fit.height, 1)) } }
+                    .overlay { if tools { toolOverlay } }
                     .offset(offset)
             }
         }
@@ -80,6 +90,18 @@ struct CompareView: View {
         .overlay(alignment: .topLeading) {
             Text(title).font(.caption).foregroundStyle(.white)
                 .padding(.horizontal, 8).padding(.vertical, 3).background(.black.opacity(0.55), in: Capsule()).padding(8)
+        }
+    }
+
+    @ViewBuilder private var toolOverlay: some View {
+        let map = PhotoMap(geo: Geo(params, Int(preview.original.width), Int(preview.original.height)),
+                           size: CGSize(width: fit.width * zoom, height: fit.height * zoom))
+        switch preview.tool {
+        case .crop where preview.cropMode:
+            CropOverlay(crop: $params.crop, size: fit, aspect: preview.cropAspect, frameAspect: fit.width / max(fit.height, 1))
+        case .heal: HealOverlay(spots: $params.heal, map: map, preview: preview)
+        case .masks: MaskOverlay(masks: $params.masks, map: map, preview: preview)
+        default: EmptyView()
         }
     }
 
@@ -197,6 +219,250 @@ struct CropOverlay: View {
             if w > maxW { w = maxW; h = w / an }
         }
         return [left ? fx - w : fx, top ? fy - h : fy, w, h]
+    }
+}
+
+/// Points on the shown picture (after crop and rotation, in points) <-> positions on the photo (fractions of its width
+/// and height), which is where heal spots and masks live.
+struct PhotoMap {
+    let geo: Geo, size: CGSize
+    var side: Double { Double(min(geo.sw, geo.sh)) }
+
+    func view(_ x: Double, _ y: Double) -> CGPoint {
+        let (u, v) = geo.output(Float(x) * geo.sw, Float(y) * geo.sh)
+        return CGPoint(x: CGFloat(u) / CGFloat(geo.ow) * size.width, y: CGFloat(v) / CGFloat(geo.oh) * size.height)
+    }
+
+    /// The photo position `(dx, dy)` fractions of its shorter side away from (x, y).
+    func view(_ x: Double, _ y: Double, plus dx: Double, _ dy: Double) -> CGPoint {
+        view(x + dx * side / Double(geo.sw), y + dy * side / Double(geo.sh))
+    }
+
+    func photo(_ p: CGPoint) -> (x: Double, y: Double) {
+        let (x, y) = geo.source(Float(p.x / size.width) * Float(geo.ow), Float(p.y / size.height) * Float(geo.oh))
+        return (Double(x / geo.sw), Double(y / geo.sh))
+    }
+
+    /// The photo move from view point a to b, in fractions of its width and height.
+    func delta(_ a: CGPoint, _ b: CGPoint) -> (x: Double, y: Double) { let p = photo(a), q = photo(b); return (q.x - p.x, q.y - p.y) }
+
+    /// A size in fractions of the photo's shorter side, in points.
+    func length(_ r: Double) -> CGFloat { CGFloat(r * side) * CGFloat(geo.k) * size.width / CGFloat(geo.ow) }
+
+    /// How far b is from a on the photo, in fractions of its shorter side, along the photo's own axes.
+    func units(_ a: (x: Double, y: Double), _ b: CGPoint) -> (x: Double, y: Double) {
+        let q = photo(b); return ((q.x - a.x) * Double(geo.sw) / side, (q.y - a.y) * Double(geo.sh) / side)
+    }
+}
+
+/// A circle outline that reads on light and dark photos.
+private func ring(_ ctx: inout GraphicsContext, _ c: CGPoint, _ r: CGFloat, width: CGFloat = 1.5, dash: [CGFloat] = [], alpha: Double = 1) {
+    let path = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+    ctx.stroke(path, with: .color(.black.opacity(0.45 * alpha)), style: StrokeStyle(lineWidth: width + 1.5, dash: dash))
+    ctx.stroke(path, with: .color(.white.opacity(alpha)), style: StrokeStyle(lineWidth: width, dash: dash))
+}
+
+private func handle(_ ctx: inout GraphicsContext, _ c: CGPoint, _ r: CGFloat = 5) {
+    let path = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+    ctx.fill(path, with: .color(.white))
+    ctx.stroke(path, with: .color(.black.opacity(0.6)), lineWidth: 1)
+}
+
+private func line(_ ctx: inout GraphicsContext, _ a: CGPoint, _ b: CGPoint, width: CGFloat = 1.5, dash: [CGFloat] = []) {
+    var p = Path(); p.move(to: a); p.addLine(to: b)
+    ctx.stroke(p, with: .color(.black.opacity(0.45)), style: StrokeStyle(lineWidth: width + 1.5, dash: dash))
+    ctx.stroke(p, with: .color(.white), style: StrokeStyle(lineWidth: width, dash: dash))
+}
+
+/// Heal tab: every spot as a circle; the selected one also shows its source (dashed) with an arrow to the spot.
+/// Click a blemish, or drag over a longer one, to heal it; drag a circle to move it, or its source to copy from elsewhere.
+struct HealOverlay: View {
+    @Binding var spots: [[Double]]?
+    let map: PhotoMap
+    let preview: Preview
+    @State private var run: [CGPoint] = []  // the stroke being brushed, in view points
+    @State private var grab: (index: Int, source: Bool, start: [Double])?
+    @State private var hover: CGPoint?
+
+    var body: some View {
+        let list = (spots ?? []).filter { $0.count == 5 }, brush = map.length(preview.brushSize)
+        Canvas { ctx, _ in
+            for (i, s) in list.enumerated() {
+                let c = map.view(s[0], s[1]), r = map.length(s[2]), selected = i == preview.selectedSpot
+                ring(&ctx, c, r, width: selected ? 2 : 1, alpha: selected ? 1 : 0.7)
+                if selected {
+                    let sc = map.view(s[3], s[4]), d = hypot(c.x - sc.x, c.y - sc.y)
+                    ring(&ctx, sc, r, dash: [4, 3])
+                    if d > 2 * r {  // arrow from the source to the spot
+                        let u = CGPoint(x: (c.x - sc.x) / d, y: (c.y - sc.y) / d), tip = CGPoint(x: c.x - u.x * r, y: c.y - u.y * r)
+                        line(&ctx, CGPoint(x: sc.x + u.x * r, y: sc.y + u.y * r), tip, width: 1)
+                        for a in [2.6, -2.6] {
+                            let ca = CGFloat(cos(a)), sa = CGFloat(sin(a))
+                            line(&ctx, tip, CGPoint(x: tip.x + 8 * (u.x * ca - u.y * sa), y: tip.y + 8 * (u.x * sa + u.y * ca)), width: 1)
+                        }
+                    }
+                }
+            }
+            for p in run { ctx.fill(Path(ellipseIn: CGRect(x: p.x - brush, y: p.y - brush, width: 2 * brush, height: 2 * brush)), with: .color(.white.opacity(0.3))) }
+            if let hover, run.isEmpty, grab == nil { ring(&ctx, hover, brush, width: 1, dash: [3, 3], alpha: 0.8) }
+        }
+        .contentShape(Rectangle())
+        .onContinuousHover { if case .active(let p) = $0 { hover = p } else { hover = nil } }
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                if grab == nil && run.isEmpty { begin(at: v.startLocation, list) }
+                if let g = grab {
+                    let d = map.delta(v.startLocation, v.location), o = g.source ? 3 : 0
+                    var s = g.start
+                    s[o] += d.x; s[o + 1] += d.y
+                    if list.indices.contains(g.index), list[g.index] != s { var l = list; l[g.index] = s; spots = l }
+                } else if let last = run.last, hypot(v.location.x - last.x, v.location.y - last.y) >= max(2, brush / 2) {
+                    run.append(v.location)
+                }
+            }
+            .onEnded { _ in
+                if grab == nil { finishRun(list) }
+                grab = nil
+            })
+        .help("Click a blemish to heal it, drag over a longer one. Drag a circle to move it, or its dashed source to copy from elsewhere.")
+    }
+
+    /// The selected spot's source, then any spot (topmost first), else a new stroke.
+    private func begin(at p: CGPoint, _ list: [[Double]]) {
+        func near(_ x: Double, _ y: Double, _ r: Double) -> Bool { let c = map.view(x, y); return hypot(c.x - p.x, c.y - p.y) <= max(map.length(r), 8) }
+        if let i = preview.selectedSpot, list.indices.contains(i), near(list[i][3], list[i][4], list[i][2]) { grab = (i, true, list[i]); return }
+        if let i = list.indices.last(where: { near(list[$0][0], list[$0][1], list[$0][2]) }) {
+            preview.selectedSpot = i; grab = (i, false, list[i]); return
+        }
+        run = [p]
+    }
+
+    /// A click is one spot; a stroke is a run of overlapping spots that share one automatically picked source.
+    private func finishRun(_ list: [[Double]]) {
+        let new = run.map { p -> [Double] in let q = map.photo(p); return [q.x, q.y, preview.brushSize] }
+        run = []
+        guard !new.isEmpty else { return }
+        let (dx, dy) = preview.photoRGB.map { healOffset($0, new) } ?? (2.5 * preview.brushSize * map.side / Double(map.geo.sw), 0)
+        spots = list + new.map { $0 + [$0[0] + dx, $0[1] + dy] }
+        preview.selectedSpot = list.count + new.count - 1
+    }
+}
+
+/// Masks tab: the selected mask on the photo. Brush: paint (or erase) over the photo, shown in red. Linear: drag the
+/// handle on either line, or anywhere else to move it. Radial: drag a handle on the edge to resize, anywhere else to move.
+struct MaskOverlay: View {
+    @Binding var masks: [LocalMask]?
+    let map: PhotoMap
+    let preview: Preview
+    @State private var run: [CGPoint] = []
+    @State private var grab: (handle: Int, start: [Double])?  // handle -1 moves the whole shape
+    @State private var hover: CGPoint?
+
+    var body: some View {
+        if let i = preview.selectedMask, let list = masks, list.indices.contains(i) {
+            let m = list[i], brush = map.length(preview.brushSize)
+            Canvas { ctx, size in
+                switch m.kind {
+                case .brush: drawBrush(&ctx, size, m, brush)
+                case .linear: drawLinear(&ctx, size, m.shape)
+                case .radial: drawRadial(&ctx, m)
+                }
+            }
+            .contentShape(Rectangle())
+            .onContinuousHover { if case .active(let p) = $0 { hover = p } else { hover = nil } }
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    if m.kind == .brush {
+                        if run.isEmpty || hypot(v.location.x - run.last!.x, v.location.y - run.last!.y) >= max(2, brush / 3) { run.append(v.location) }
+                        return
+                    }
+                    if grab == nil { grab = (handles(m).firstIndex { hypot($0.x - v.startLocation.x, $0.y - v.startLocation.y) < 10 } ?? -1, m.shape) }
+                    if let g = grab { set(i, dragged(m.kind, g.handle, g.start, v)) }
+                }
+                .onEnded { _ in
+                    if m.kind == .brush, !run.isEmpty {  // a stroke is committed (and undone) as a whole
+                        let r = preview.erasing ? -preview.brushSize : preview.brushSize
+                        set(i, m.shape + run.flatMap { p -> [Double] in let q = map.photo(p); return [q.x, q.y, r] })
+                    }
+                    run = []; grab = nil
+                })
+        }
+    }
+
+    private func set(_ i: Int, _ shape: [Double]) {
+        guard var list = masks, list.indices.contains(i), list[i].shape != shape else { return }
+        list[i].shape = shape
+        masks = list
+    }
+
+    /// Linear: the two points. Radial: the edge handles right, bottom, left, top.
+    private func handles(_ m: LocalMask) -> [CGPoint] {
+        let s = m.shape
+        switch m.kind {
+        case .linear: return [map.view(s[0], s[1]), map.view(s[2], s[3])]
+        case .radial: return [map.view(s[0], s[1], plus: s[2], 0), map.view(s[0], s[1], plus: 0, s[3]),
+                              map.view(s[0], s[1], plus: -s[2], 0), map.view(s[0], s[1], plus: 0, -s[3])]
+        case .brush: return []
+        }
+    }
+
+    private func dragged(_ kind: MaskKind, _ h: Int, _ s0: [Double], _ v: DragGesture.Value) -> [Double] {
+        var s = s0
+        let d = map.delta(v.startLocation, v.location)
+        switch (kind, h) {
+        case (.linear, 0), (.linear, 1): s[2 * h] += d.x; s[2 * h + 1] += d.y
+        case (.radial, 0...3):
+            let u = map.units((s0[0], s0[1]), v.location)
+            if h % 2 == 0 { s[2] = max(0.01, abs(u.x)) } else { s[3] = max(0.01, abs(u.y)) }
+        default: s[0] += d.x; s[1] += d.y; if kind == .linear { s[2] += d.x; s[3] += d.y }
+        }
+        return s
+    }
+
+    private func drawBrush(_ ctx: inout GraphicsContext, _ size: CGSize, _ m: LocalMask, _ brush: CGFloat) {
+        if preview.maskOverlay {
+            let inv = m.invert == true
+            ctx.opacity = 0.4
+            ctx.drawLayer { l in
+                func dab(_ c: CGPoint, _ r: CGFloat, erase: Bool) {
+                    l.blendMode = erase != inv ? .destinationOut : .normal
+                    l.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(.red))
+                }
+                if inv { l.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.red)) }
+                for k in stride(from: 0, to: m.shape.count - 2, by: 3) {
+                    dab(map.view(m.shape[k], m.shape[k + 1]), map.length(abs(m.shape[k + 2])), erase: m.shape[k + 2] < 0)
+                }
+                for p in run { dab(p, brush, erase: preview.erasing) }
+            }
+            ctx.opacity = 1
+        }
+        if let hover { ring(&ctx, hover, brush, width: 1, dash: preview.erasing ? [3, 3] : [], alpha: 0.9) }
+    }
+
+    /// Lightroom's three lines: full effect, middle, no effect.
+    private func drawLinear(_ ctx: inout GraphicsContext, _ size: CGSize, _ s: [Double]) {
+        let a = map.view(s[0], s[1]), b = map.view(s[2], s[3]), d = max(hypot(b.x - a.x, b.y - a.y), 1)
+        let n = CGPoint(x: -(b.y - a.y) / d * 4000, y: (b.x - a.x) / d * 4000), mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        for (p, dash) in [(a, [CGFloat]()), (mid, [5, 4]), (b, [])] {
+            line(&ctx, CGPoint(x: p.x - n.x, y: p.y - n.y), CGPoint(x: p.x + n.x, y: p.y + n.y), width: 1, dash: dash)
+        }
+        line(&ctx, a, b, width: 1, dash: [2, 3])
+        handle(&ctx, a); handle(&ctx, b, 4)
+    }
+
+    private func drawRadial(_ ctx: inout GraphicsContext, _ m: LocalMask) {
+        let s = m.shape, f = (m.feather ?? 50) / 100
+        for (k, dash) in [(1.0, [CGFloat]()), (1 - f, [4, 4])] where k > 0.02 {
+            var p = Path()
+            for t in 0...72 {
+                let a = Double(t) * .pi / 36, q = map.view(s[0], s[1], plus: s[2] * k * cos(a), s[3] * k * sin(a))
+                t == 0 ? p.move(to: q) : p.addLine(to: q)
+            }
+            ctx.stroke(p, with: .color(.black.opacity(0.45)), style: StrokeStyle(lineWidth: 2.5, dash: dash))
+            ctx.stroke(p, with: .color(.white), style: StrokeStyle(lineWidth: 1, dash: dash))
+        }
+        handle(&ctx, map.view(s[0], s[1]), 4)
+        for h in handles(m) { handle(&ctx, h) }
     }
 }
 

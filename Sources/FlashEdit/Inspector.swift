@@ -1,8 +1,8 @@
-// The right-hand panel: histogram, then Edit (presets and every adjustment), Crop, and Chat.
+// The right-hand panel: histogram, then Edit (presets and every adjustment), Crop, Heal, Masks and Chat.
 import AppKit
 import SwiftUI
 
-enum InspectorTab: String, CaseIterable { case edit = "Edit", crop = "Crop", chat = "Chat" }
+enum InspectorTab: String, CaseIterable { case edit = "Edit", crop = "Crop", heal = "Heal", masks = "Masks", chat = "Chat" }
 
 /// Everything here writes straight into the library, so it is saved as you go.
 struct Inspector: View {
@@ -24,10 +24,13 @@ struct Inspector: View {
             switch tab {
             case .edit: Adjustments(photo: binding, region: $region, preview: preview)
             case .crop: CropPanel(photo: binding, preview: preview) { tab = .edit }
+            case .heal: HealPanel(photo: binding, preview: preview)
+            case .masks: MasksPanel(photo: binding, preview: preview)
             case .chat: ChatPanel(id: id, region: region, preview: preview)
             }
         }
-        .onChange(of: tab, initial: true) { preview.cropMode = tab == .crop }
+        .onChange(of: tab, initial: true) { preview.cropMode = tab == .crop; preview.tool = tab }
+        .onAppear { (preview.selectedSpot, preview.selectedMask) = (nil, nil) }  // a new photo: its own spots and masks
         .onDisappear { preview.cropMode = false }
     }
 
@@ -47,12 +50,13 @@ struct Adjustments: View {
     @State private var channel = 0  // Color Mixer: 0 hue, 1 saturation, 2 luminance
     @State private var curveChannel = 0  // 0 RGB, 1 red, 2 green, 3 blue
     @AppStorage("expandedSections") private var expanded = "Flash Look,Light"
+    @AppStorage("inspectorTab") private var tab = InspectorTab.edit
     @FocusState private var searchFocused: Bool
     private let presets = Presets.shared
 
     private struct Row: Identifiable { let id: String, section: String, search: String, view: AnyView }
     private static let sections = ["Preset", "Flash Look", "Light", "Presence", "White Balance", "Tone Curve", "Color Mixer",
-                                   "Color Grading", "Skin", "Blur", "Detail", "Effects"]
+                                   "Color Grading", "Skin", "Blur", "Detail", "Effects", "Local Edits"]
     private static let bands = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"]
     private static let channels: [(name: String, keys: String, kp: WritableKeyPath<Params, [Double]?>)] = [
         ("Hue", "hue shift", \.hsl_hue), ("Saturation", "saturation sat vibrance", \.hsl_sat), ("Luminance", "luminance lightness brightness", \.hsl_lum)]
@@ -303,6 +307,14 @@ struct Adjustments: View {
         add("Effects", "Fog start", "mist height", value(\.fog_start), 0...1, .background)
         add("Effects", "Fog falloff", "mist gamma", value(\.fog_gamma), 0.3...3, .background)
         custom("Effects", "fogcolor", "fog mist color colour", ColorPicker("Fog color", selection: fogColor, supportsOpacity: false).disabled(region == .person))
+        // Local edits live in their own tabs, since they're drawn on the photo
+        let spots = photo.params.heal?.count ?? 0, masks = photo.params.masks?.count ?? 0
+        custom("Local Edits", "heal", "heal healing spot removal blemish clone remove retouch", LabeledContent("Heal") {
+            Button(spots == 0 ? "Remove Spots…" : "\(spots) spot\(spots == 1 ? "" : "s")…") { tab = .heal }
+        })
+        custom("Local Edits", "masks", "masks mask local brush gradient linear radial graduated filter adjustment", LabeledContent("Masks") {
+            Button(masks == 0 ? "Add a Mask…" : "\(masks) mask\(masks == 1 ? "" : "s")…") { tab = .masks }
+        })
 
         let words = query.lowercased().split(separator: " ")
         return out.filter { r in words.allSatisfy { r.search.contains($0) } }
@@ -333,6 +345,7 @@ struct Adjustments: View {
         case "Blur": return q.blur != nil
         case "Detail": return q.sharpen != nil || q.denoise != nil || q.denoise_color != nil
         case "Effects": return q.vignette != nil || q.grain != nil || q.fog != 0
+        case "Local Edits": return q.heal != nil || q.masks != nil
         default: return false
         }
     }
@@ -342,19 +355,8 @@ struct Adjustments: View {
     /// `only`: the region a slider acts on, so it greys out while the other region is isolated.
     private func knob(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, _ only: Region? = nil,
                       digits: Int = 2, swatch: Color? = nil) -> some View {
-        LabeledContent {
-            HStack {
-                Slider(value: value, in: range)
-                Text(value.wrappedValue, format: .number.precision(.fractionLength(digits))).monospacedDigit()
-                    .foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if let swatch { Circle().fill(swatch).frame(width: 9, height: 9) }
-                Text(title)
-            }
-        }
-        .disabled(only != nil && region != .whole && region != only)
+        ValueSlider(title: title, value: value, range: range, digits: digits, swatch: swatch)
+            .disabled(only != nil && region != .whole && region != only)
     }
 
     /// Optional knobs: values within `snap` of `off` are stored as nil (off); others are rounded to `step`.
@@ -420,6 +422,30 @@ struct Adjustments: View {
             $0.shadows = add($0.shadows, a.shadows, -100, 100)
             $0.whites = add($0.whites, a.whites, -100, 100)
             $0.blacks = add($0.blacks, a.blacks, -100, 100)
+        }
+    }
+}
+
+/// A labelled slider with its value, as every adjustment shows it.
+struct ValueSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var digits = 2
+    var swatch: Color?
+
+    var body: some View {
+        LabeledContent {
+            HStack {
+                Slider(value: $value, in: range)
+                Text(value, format: .number.precision(.fractionLength(digits))).monospacedDigit()
+                    .foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let swatch { Circle().fill(swatch).frame(width: 9, height: 9) }
+                Text(title)
+            }
         }
     }
 }
@@ -616,6 +642,144 @@ struct CropPanel: View {
         let (w, h) = rel >= 1 ? (1.0, 1 / rel) : (rel, 1.0)
         preview.cropAspect = target
         photo.change(.whole) { $0.crop = w > 0.999 && h > 0.999 ? nil : [(1 - w) / 2, (1 - h) / 2, w, h] }
+    }
+}
+
+// MARK: - Heal
+
+/// Spot removal. The spots are drawn and edited on the photo (HealOverlay); this panel sets the size and clears them.
+/// Spots are whole-photo edits, like the crop, and apply to both Isolate regions.
+struct HealPanel: View {
+    @Binding var photo: Photo
+    @Bindable var preview: Preview
+
+    private var spots: [[Double]] { photo.params.heal ?? [] }
+    private var selected: Int? { preview.selectedSpot.flatMap { spots.indices.contains($0) ? $0 : nil } }
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Click a blemish to heal it, or drag over a longer one. Each spot copies a nearby patch and matches it to its surroundings. Drag a circle to move it, or its dashed source to copy from somewhere else. Hold Space to pan.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ValueSlider(title: selected == nil ? "Brush size" : "Spot size", value: Binding(get: { (selected.map { spots[$0][2] } ?? preview.brushSize) * 100 }, set: { v in
+                    preview.brushSize = (v * 10).rounded() / 1000
+                    if let i = selected { photo.change(.whole) { $0.heal?[i][2] = preview.brushSize } }
+                }), range: 0.5...15, digits: 1)
+            }
+            Section {
+                LabeledContent("Spots", value: "\(spots.count)")
+                HStack {
+                    Button("Delete Spot") {
+                        if let i = selected { photo.change(.whole) { $0.heal?.remove(at: i); if $0.heal?.isEmpty == true { $0.heal = nil } } }
+                        preview.selectedSpot = nil
+                    }
+                    .disabled(selected == nil)
+                    Spacer()
+                    Button("Clear All") { photo.change(.whole) { $0.heal = nil }; preview.selectedSpot = nil }.disabled(spots.isEmpty)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Masks
+
+/// Local adjustments. Shapes are drawn on the photo (MaskOverlay); each mask has its own light and colour settings.
+/// Masks are whole-photo edits, like the crop, and apply to both Isolate regions.
+struct MasksPanel: View {
+    @Binding var photo: Photo
+    @Bindable var preview: Preview
+
+    private static let settings: [(name: String, kp: WritableKeyPath<LocalMask, Double?>, range: ClosedRange<Double>)] = [
+        ("Exposure", \.exposure, -4...4), ("Contrast", \.contrast, -100...100), ("Highlights", \.highlights, -100...100),
+        ("Shadows", \.shadows, -100...100), ("Temp", \.temp, -100...100), ("Tint", \.tint, -100...100),
+        ("Saturation", \.saturation, -100...100), ("Clarity", \.clarity, -100...100), ("Sharpness", \.sharpness, -100...100)]
+    private static let icons: [MaskKind: String] = [.brush: "paintbrush.pointed", .linear: "square.tophalf.filled", .radial: "circle.dashed"]
+
+    private var masks: [LocalMask] { photo.params.masks ?? [] }
+    private var selected: Int? { preview.selectedMask.flatMap { masks.indices.contains($0) ? $0 : nil } }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    ForEach(MaskKind.allCases, id: \.self) { k in
+                        Button { add(k) } label: { Label(k.rawValue.capitalized, systemImage: Self.icons[k]!) }
+                    }
+                }
+                if masks.isEmpty {
+                    Text("Add a mask, then shape it on the photo: paint with Brush, drag Linear's lines, or Radial's edge. Each mask has its own light and colour settings.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(masks.indices, id: \.self) { i in
+                    HStack {
+                        Image(systemName: Self.icons[masks[i].kind]!).frame(width: 18)
+                        Text(name(i))
+                        if masks[i].invert == true { Text("inverted").font(.caption).foregroundStyle(.secondary) }
+                        Spacer()
+                        Button { delete(i) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).help("Delete \(name(i))")
+                    }
+                    .padding(.vertical, 3).padding(.horizontal, 6)
+                    .background(selected == i ? Color.accentColor.opacity(0.2) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                    .onTapGesture { preview.selectedMask = i }
+                }
+            } header: { Text("Masks") }
+            if let i = selected {
+                let m = masks[i]
+                Section {
+                    if m.kind == .brush {
+                        Picker("Brush", selection: $preview.erasing) { Text("Paint").tag(false); Text("Erase").tag(true) }.pickerStyle(.segmented)
+                        ValueSlider(title: "Size", value: Binding(get: { preview.brushSize * 100 }, set: { preview.brushSize = ($0 * 10).rounded() / 1000 }),
+                                    range: 0.5...15, digits: 1)
+                        Toggle("Show painted area", isOn: $preview.maskOverlay)
+                    }
+                    if m.kind != .linear {
+                        ValueSlider(title: "Feather", value: Binding(get: { m.feather ?? 50 }, set: { v in edit(i) { $0.feather = abs(v - 50) < 1 ? nil : v.rounded() } }),
+                                    range: 0...100, digits: 0)
+                    }
+                    Toggle("Invert", isOn: Binding(get: { m.invert == true }, set: { v in edit(i) { $0.invert = v ? true : nil } }))
+                } header: { Text(name(i)) }
+                Section {
+                    ForEach(Self.settings, id: \.name) { st in
+                        let exposure = st.name == "Exposure"
+                        ValueSlider(title: st.name, value: Binding(get: { m[keyPath: st.kp] ?? 0 }, set: { v in
+                            let step = exposure ? 0.01 : 1
+                            edit(i) { $0[keyPath: st.kp] = abs(v) < (exposure ? 0.03 : 2) ? nil : (v / step).rounded() * step }
+                        }), range: st.range, digits: exposure ? 2 : 0)
+                    }
+                    HStack {
+                        Button("Reset Settings") { edit(i) { $0 = LocalMask(kind: $0.kind, shape: $0.shape, feather: $0.feather, invert: $0.invert) } }
+                        Spacer()
+                        Button("Delete Mask", role: .destructive) { delete(i) }
+                    }
+                } header: { Text("Adjust") }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func name(_ i: Int) -> String { "\(masks[i].kind.rawValue.capitalized) \(masks[...i].filter { $0.kind == masks[i].kind }.count)" }
+
+    /// New masks start where they usually go: a linear one darkens a sky from the top, a radial one sits in the middle.
+    private func add(_ k: MaskKind) {
+        let shape: [Double] = k == .linear ? [0.5, 0.05, 0.5, 0.45] : k == .radial ? [0.5, 0.5, 0.25, 0.3] : []
+        photo.change(.whole) { $0.masks = ($0.masks ?? []) + [LocalMask(kind: k, shape: shape)] }
+        preview.selectedMask = masks.count - 1
+        preview.erasing = false
+    }
+
+    private func edit(_ i: Int, _ f: (inout LocalMask) -> Void) {
+        photo.change(.whole) { p in
+            guard var ms = p.masks, ms.indices.contains(i) else { return }
+            f(&ms[i]); p.masks = ms
+        }
+    }
+
+    private func delete(_ i: Int) {
+        photo.change(.whole) { $0.masks?.remove(at: i); if $0.masks?.isEmpty == true { $0.masks = nil } }
+        preview.selectedMask = nil
     }
 }
 

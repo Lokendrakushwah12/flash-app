@@ -61,8 +61,10 @@ func loadJSON<T: Decodable>(_ type: T.Type, _ file: URL) -> T? {
     }
 
     /// Saves a look under `name` (required); a preset with the same name is replaced. Returns its id.
+    /// Heal spots belong to one photo, so they're left out.
     func save(_ name: String, _ s: EditState) -> Int {
         var st = s
+        st.params.heal = nil; st.bg?.heal = nil; st.fg?.heal = nil
         if let i = user.firstIndex(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             st.preset = user[i].id
             user[i].state = st
@@ -265,6 +267,15 @@ final class Preview {
     @ObservationIgnored var previewWidth: CGFloat = 1
     /// Set while zoomed past the preview's pixels: renders again at up to 4096 px once edits settle.
     @ObservationIgnored var wantDetail = false { didSet { if wantDetail, !oldValue, let last { show(last) } } }
+    // Heal and Masks tabs: what the canvas draws and edits
+    var tool = InspectorTab.edit
+    var selectedSpot: Int?
+    var selectedMask: Int?
+    var brushSize = 0.03  // new heal spots and brush dabs, a fraction of the photo's shorter side
+    var erasing = false  // the mask brush erases instead of painting
+    var maskOverlay = true  // tint the selected brush mask red
+    /// The shown photo as loaded (preview size): heal spots pick their source on it.
+    var photoRGB: RGB? { last.flatMap { sources[$0.id]?.rgb } }
 
     private struct Source { let rgb: RGB, mask: [Float], faces: [Face], original: CGSize, info: String }
     @ObservationIgnored private var sources: [UUID: Source] = [:]
@@ -383,6 +394,16 @@ enum Claude {
         - sharpen (0..150), sharpen_radius (0.5..3), sharpen_masking (0..100); denoise, denoise_color (0..100).
         - vignette (negative darkens corners), vignette_midpoint, vignette_feather (0..100), vignette_roundness; grain, grain_size (0..100).
         - crop [x, y, w, h] in 0..1, straighten (degrees, -45..45), rotate (0, 90, 180, 270), flip (1 = mirrored).
+        Local edits. Positions are fractions of the photo's width and height and sizes fractions of its shorter side, all on the \
+        original photo before crop and rotation (the images you can Read share that frame only while no crop or rotation is set). Always send the whole list; null removes all.
+        - heal: spot removal, a list of [x, y, r, sx, sy]: a blemish or small object at x, y with radius r, filled from the clean \
+        patch centred at sx, sy (nearby, the same kind of surface, at least 2r away). The copy is colour-matched and feathered.
+        - masks: local adjustments, applied after Light in list order, a list of objects {"kind": "linear" | "radial" | "brush", \
+        "shape": [...], "feather": 0..100 (default 50), "invert": true/false, "exposure" (stops, -4..4), "contrast", "highlights", \
+        "shadows", "temp" (+ warmer), "tint" (+ magenta, - green), "saturation", "clarity", "sharpness" (-100..100, negative softens)}. \
+        linear shape [x0, y0, x1, y1]: full effect at the first point fading to none at the second, e.g. a darker sky \
+        [0.5, 0, 0.5, 0.4] with exposure -0.8. radial shape [cx, cy, rx, ry]: inside the ellipse (invert for outside, e.g. a \
+        spotlight on the subject). brush shape: dabs [x, y, r, x, y, r, ...] (a negative r erases).
 
         Isolate: \(region == .whole ? "the whole photo." : "the user is editing only the \(region.rawValue.lowercased()). Your changes apply only to the \(region.rawValue.lowercased()); the rest of the photo keeps its own edit, so parameters for the other region have no visible effect.")
         Current preset: \(photo.preset)
