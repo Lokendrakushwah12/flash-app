@@ -1,0 +1,22 @@
+# Push a version tag (git tag v1.2.0 && git push origin v1.2.0) and this builds the universal FlashEdit.app
+# and publishes it as FlashEdit.zip on a GitHub Release. The landing page links to the latest one.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build FlashEdit.app (Apple silicon + Intel)
+        run: scripts/build.sh "${GITHUB_REF_NAME#v}"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/FlashEdit.zip --title "FlashEdit $GITHUB_REF_NAME" \
+            --notes-file .github/release-notes.md \
+            || gh release upload "$GITHUB_REF_NAME" dist/FlashEdit.zip --clobber

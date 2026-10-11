@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+dist/
+*.app
+samples/
+reference/flashmask
+.DS_Store

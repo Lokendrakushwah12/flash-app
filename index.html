@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlashEdit — flash photo edits for Mac</title>
+<meta name="description" content="Meitu-style flash edits for your Mac: darker, moodier backgrounds and a flash-lit person. Offline, deterministic, free.">
+<meta property="og:title" content="FlashEdit — flash photo edits for Mac">
+<meta property="og:description" content="Darker backgrounds, flash-lit people, skin, colour and fog. Rendered on your Mac, offline, the same every time.">
+<meta property="og:image" content="https://lokendrakushwah12.github.io/flash-app/assets/icon.png">
+<link rel="icon" href="assets/icon.png">
+<style>
+  :root {
+    --night: #0b0b22; --indigo: #1a1b4b; --violet: #3a3f8f; --gold: #ffc94d; --warm: #fff4c8;
+    --text: #eceefe; --muted: #a6a9d6; --card: rgba(255, 255, 255, .045); --line: rgba(255, 255, 255, .09);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--text); background: var(--night);
+    font: 17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {  /* the flash, behind the hero */
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background: radial-gradient(60rem 38rem at 50% -8rem, rgba(255, 201, 77, .22), transparent 60%),
+                radial-gradient(70rem 50rem at 50% 10%, #26286a 0%, var(--night) 70%);
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; text-decoration: none; }
+  nav .brand img { width: 30px; height: 30px; }
+  nav .links a { color: var(--muted); text-decoration: none; margin-left: 22px; font-size: 15px; }
+  nav .links a:hover { color: var(--text); }
+
+  header { text-align: center; padding: 56px 0 40px; }
+  header .icon { width: 148px; height: 148px; filter: drop-shadow(0 18px 50px rgba(255, 190, 70, .35)); }
+  h1 { font: 700 clamp(44px, 7vw, 76px)/1.02 -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+       letter-spacing: -.035em; margin: 22px 0 14px; }
+  h1 span { background: linear-gradient(180deg, #fff 20%, var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { max-width: 620px; margin: 0 auto; color: var(--muted); font-size: clamp(18px, 2.2vw, 21px); }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 30px 0 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 9px; padding: 13px 22px; border-radius: 12px;
+         font-weight: 600; text-decoration: none; transition: transform .15s ease, box-shadow .15s ease; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn.primary { color: #2a1600; background: linear-gradient(180deg, #ffe9a8, var(--gold));
+                 box-shadow: 0 10px 30px rgba(255, 190, 70, .35), inset 0 1px 0 rgba(255, 255, 255, .7); }
+  .btn.ghost { border: 1px solid var(--line); background: var(--card); }
+  .btn svg { width: 18px; height: 18px; }
+  .meta { color: var(--muted); font-size: 14px; }
+
+  .compare { position: relative; margin: 34px auto 0; max-width: 960px; border-radius: 20px; overflow: hidden;
+             border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0, 0, 0, .5); aspect-ratio: 16 / 9; }
+  .compare svg { display: block; width: 100%; height: 100%; }
+  .compare .divider { position: absolute; top: 0; bottom: 0; left: var(--split, 50%); width: 2px; margin-left: -1px;
+                      background: rgba(255, 255, 255, .85); pointer-events: none; }
+  .compare .divider::after { content: "‹ ›"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                             width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+                             background: #fff; color: #222; font-weight: 700; letter-spacing: 2px;
+                             box-shadow: 0 6px 20px rgba(0, 0, 0, .35); }
+  .compare .tag { position: absolute; top: 14px; padding: 4px 11px; border-radius: 99px; font-size: 13px;
+                  background: rgba(0, 0, 0, .5); backdrop-filter: blur(6px); pointer-events: none; }
+  .compare .tag.l { left: 14px; } .compare .tag.r { right: 14px; }
+  .compare input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+  .compare input:focus-visible + .ring { position: absolute; inset: 0; border-radius: 20px; outline: 3px solid var(--gold); outline-offset: -3px; }
+  .caption { text-align: center; color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+
+  section { padding: 84px 0 0; }
+  h2 { font: 700 clamp(30px, 4vw, 40px)/1.1 -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+       letter-spacing: -.025em; margin: 0 0 10px; text-align: center; }
+  .sub { color: var(--muted); text-align: center; max-width: 600px; margin: 0 auto 36px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .card .glyph { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; font-size: 19px;
+                 background: linear-gradient(180deg, #4a4fb0, var(--indigo)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .15); margin-bottom: 14px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 6px; border-radius: 5px;
+        border: 1px solid var(--line); background: rgba(255, 255, 255, .06); }
+
+  .steps { counter-reset: s; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .steps .card { position: relative; padding-top: 52px; }
+  .steps .card::before { counter-increment: s; content: counter(s); position: absolute; top: 18px; left: 22px; width: 26px; height: 26px;
+                         border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px;
+                         color: #2a1600; background: var(--gold); }
+  .code { display: flex; gap: 8px; align-items: center; margin-top: 12px; padding: 9px 10px 9px 12px; border-radius: 10px;
+          background: rgba(0, 0, 0, .35); border: 1px solid var(--line); font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .code code { flex: 1; overflow-x: auto; white-space: nowrap; }
+  .code button { flex: none; font: inherit; font-size: 12px; color: var(--text); background: rgba(255, 255, 255, .1);
+                 border: 0; border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+
+  .final { text-align: center; padding: 96px 0 30px; }
+  footer { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0 50px; border-top: 1px solid var(--line); margin-top: 60px; }
+  footer a { color: var(--text); }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    nav .links a:not(:last-child) { display: none; }
+    header { padding-top: 28px; }
+    header .icon { width: 116px; height: 116px; }
+    section { padding-top: 64px; }
+    .compare { border-radius: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#"><img src="assets/icon.png" alt=""> FlashEdit</a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/Lokendrakushwah12/flash-app">GitHub</a>
+    </div>
+  </nav>
+
+  <header>
+    <img class="icon" src="assets/icon.png" alt="FlashEdit app icon">
+    <h1><span>FlashEdit</span></h1>
+    <p class="lede">The Meitu-style flash look for your Mac. Darker, moodier backgrounds, a flash-lit person, real skin
+      tones. Rendered on your Mac, offline, the same every time.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/Lokendrakushwah12/flash-app/releases/latest/download/FlashEdit.zip">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.3-.9-1.7 0-3.3 1-4.1 2.5-1.8 3.1-.5 7.6 1.3 10.1.8 1.2 1.8 2.6 3.1 2.5 1.3 0 1.7-.8 3.2-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.4-.9-2.4-4.1zM14 5.2c.7-.8 1.2-2 1-3.2-1 .1-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3.1 1.1.1 2.2-.6 2.9-1.4z"/></svg>
+        Download for macOS
+      </a>
+      <a class="btn ghost" href="https://github.com/Lokendrakushwah12/flash-app">View on GitHub</a>
+    </div>
+    <p class="meta">Free · macOS 14 Sonoma or later · Apple silicon &amp; Intel</p>
+
+    <div class="compare" id="compare" style="--split: 38%">
+      <svg viewBox="0 0 960 540" role="img" aria-label="Illustration: a hazy photo turned into a dark, foggy background with a flash-lit person">
+        <defs>
+          <linearGradient id="skyB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c3d1df"/><stop offset="1" stop-color="#ebe5d6"/></linearGradient>
+          <linearGradient id="skyA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#30357a"/><stop offset=".7" stop-color="#15163d"/><stop offset="1" stop-color="#0d0d26"/></linearGradient>
+          <linearGradient id="fog" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfd6ff" stop-opacity="0"/><stop offset=".55" stop-color="#cfd6ff" stop-opacity=".28"/><stop offset="1" stop-color="#cfd6ff" stop-opacity="0"/></linearGradient>
+          <radialGradient id="glow"><stop offset="0" stop-color="#ffd98a" stop-opacity=".55"/><stop offset="1" stop-color="#ffd98a" stop-opacity="0"/></radialGradient>
+          <path id="far" d="M0 300 L120 214 L210 262 L330 150 L450 252 L560 182 L690 262 L800 192 L960 272 V540 H0 Z"/>
+          <path id="mid" d="M0 382 C120 332 220 362 330 342 C460 316 560 372 700 346 C820 326 900 352 960 342 V540 H0 Z"/>
+          <path id="ground" d="M0 470 C200 450 380 466 480 462 C620 458 780 446 960 456 V540 H0 Z"/>
+          <path id="pants" d="M452 396 L444 506 L469 506 L480 432 L491 506 L516 506 L508 396 Z"/>
+          <path id="jacket" d="M444 300 Q480 284 516 300 L524 402 L436 402 Z M444 306 L422 382 L436 387 L456 332 Z M516 306 L538 382 L524 387 L504 332 Z"/>
+          <path id="hair" d="M457 254 Q456 226 480 226 Q504 226 503 254 Q499 236 480 236 Q461 236 457 254 Z"/>
+          <clipPath id="afterClip"><rect id="clipRect" x="364.8" y="0" width="595.2" height="540"/></clipPath>
+        </defs>
+        <g>
+          <rect width="960" height="540" fill="url(#skyB)"/>
+          <use href="#far" fill="#a9b7ba"/><use href="#mid" fill="#9cab8c"/><use href="#ground" fill="#909b6d"/>
+          <use href="#pants" fill="#d3ccbb"/><use href="#jacket" fill="#6f8bc4"/>
+          <rect x="471" y="270" width="18" height="20" fill="#c99d82"/><circle cx="480" cy="256" r="22" fill="#cfa287"/>
+          <use href="#hair" fill="#4b3429"/>
+          <rect x="440" y="502" width="32" height="10" rx="4" fill="#6b6b6b"/><rect x="488" y="502" width="32" height="10" rx="4" fill="#6b6b6b"/>
+        </g>
+        <g clip-path="url(#afterClip)">
+          <rect width="960" height="540" fill="url(#skyA)"/>
+          <use href="#far" fill="#2b3557"/><use href="#mid" fill="#212f43"/>
+          <rect y="210" width="960" height="230" fill="url(#fog)"/>
+          <use href="#ground" fill="#1b251e"/>
+          <ellipse cx="480" cy="380" rx="170" ry="200" fill="url(#glow)"/>
+          <use href="#pants" fill="#f6f1e5"/><use href="#jacket" fill="#86a8ff"/>
+          <rect x="471" y="270" width="18" height="20" fill="#eab896"/><circle cx="480" cy="256" r="22" fill="#f3c5a4"/>
+          <use href="#hair" fill="#22160f"/>
+          <path d="M447 304 Q480 291 513 304" stroke="#fff" stroke-opacity=".55" stroke-width="3" fill="none"/>
+          <rect x="440" y="502" width="32" height="10" rx="4" fill="#d8d8d8"/><rect x="488" y="502" width="32" height="10" rx="4" fill="#d8d8d8"/>
+        </g>
+      </svg>
+      <div class="divider"></div>
+      <span class="tag l">Before</span><span class="tag r">After</span>
+      <input type="range" min="0" max="100" value="38" step="0.5" aria-label="Drag to compare before and after">
+      <div class="ring"></div>
+    </div>
+    <p class="caption">Drag to compare. Illustration; FlashEdit works on your own photos.</p>
+  </header>
+
+  <section id="features">
+    <h2>Everything for the flash look</h2>
+    <p class="sub">Start from a look, then fine-tune any part of it, or just tell Claude what you want.</p>
+    <div class="grid">
+      <div class="card"><div class="glyph">⚡︎</div><h3>Four looks + Strength</h3><p>Looks learned from real reference edits, a None option, and a Strength slider to fade any edit in or out.</p></div>
+      <div class="card"><div class="glyph">◐</div><h3>Isolate</h3><p>Edit the whole photo, only the background or only the person. Apple Vision finds them for you.</p></div>
+      <div class="card"><div class="glyph">✦</div><h3>Skin &amp; lips</h3><p>Face and body tone, plastic shine from glossy to matte, and pink lips traced from the lip outline.</p></div>
+      <div class="card"><div class="glyph">◑</div><h3>Color Mixer</h3><p>Hue, saturation and luminance for eight colours, like Lightroom's HSL panel. Search any slider with <kbd>⌘F</kbd>.</p></div>
+      <div class="card"><div class="glyph">✳︎</div><h3>Chat with Claude</h3><p>“Darker background, warmer skin.” Claude moves the sliders, never the pixels, so you can keep tweaking.</p></div>
+      <div class="card"><div class="glyph">▣</div><h3>A library that remembers</h3><p>Every photo keeps its edit, chat and versions. Undo with <kbd>⌘Z</kbd>, save a version with <kbd>⌘S</kbd>, save your own presets.</p></div>
+      <div class="card"><div class="glyph">⌖</div><h3>Zoom &amp; compare</h3><p>Before and after side by side. Pinch to zoom, hold Space to pan, hold to see the original.</p></div>
+      <div class="card"><div class="glyph">⇪</div><h3>HEIC in, HEIC out</h3><p>Drag photos from Finder or straight from Photos. Export at full resolution as JPEG or HEIC.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Private by design</h2>
+    <p class="sub">Your photos never leave your Mac. Person and face detection run on-device with Apple Vision, and the
+      edit is plain maths on your CPU, so the same settings always give the same picture. Chat is optional and only
+      talks to the Claude Code app you already have installed.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install in a minute</h2>
+    <p class="sub">FlashEdit isn't notarized by Apple yet, so macOS asks once before the first launch.</p>
+    <div class="steps">
+      <div class="card"><h3>Download</h3><p>Get <b>FlashEdit.zip</b> from the <a href="https://github.com/Lokendrakushwah12/flash-app/releases/latest">latest release</a> and double-click it.</p></div>
+      <div class="card"><h3>Move to Applications</h3><p>Drag <b>FlashEdit.app</b> into your Applications folder and open it.</p></div>
+      <div class="card"><h3>Allow it once</h3><p>If macOS can't verify it: <b>System Settings → Privacy &amp; Security → Open Anyway</b>. Or run:</p>
+        <div class="code"><code id="cmd">xattr -dr com.apple.quarantine /Applications/FlashEdit.app</code><button type="button" id="copy">Copy</button></div></div>
+    </div>
+  </section>
+
+  <div class="final">
+    <a class="btn primary" href="https://github.com/Lokendrakushwah12/flash-app/releases/latest/download/FlashEdit.zip">Download FlashEdit</a>
+  </div>
+
+  <footer>
+    FlashEdit · Swift, SwiftUI, Apple Vision and Accelerate · <a href="https://github.com/Lokendrakushwah12/flash-app">Source on GitHub</a>
+  </footer>
+</div>
+<script>
+  const compare = document.getElementById("compare"), clip = document.getElementById("clipRect");
+  compare.querySelector("input").addEventListener("input", e => {
+    const v = +e.target.value, x = 960 * v / 100;
+    clip.setAttribute("x", x); clip.setAttribute("width", 960 - x);
+    compare.style.setProperty("--split", v + "%");
+  });
+  document.getElementById("copy").addEventListener("click", async e => {
+    try { await navigator.clipboard.writeText(document.getElementById("cmd").textContent); e.target.textContent = "Copied"; }
+    catch { e.target.textContent = "Select & copy"; }
+  });
+</script>
+</body>
+</html>
