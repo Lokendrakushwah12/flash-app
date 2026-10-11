@@ -24,14 +24,58 @@ struct Params: Codable, Equatable {
     var lips: Double?  // pink lips, -100...100 (nil = 0; negative = nude)
     // Color Mixer, like Lightroom's HSL: 8 bands (red, orange, yellow, green, aqua, blue, purple, magenta), -100...100
     var hsl_hue: [Double]?, hsl_sat: [Double]?, hsl_lum: [Double]?
-    var look: Params {  // the edit at full strength, with 0 knobs counted as off
+    // Lightroom-style develop (Develop.swift). Sliders are -100...100 unless noted.
+    var exposure: Double?  // stops, -5...5
+    var contrast: Double?, highlights: Double?, shadows: Double?, whites: Double?, blacks: Double?
+    var texture: Double?, clarity_all: Double?, vibrance: Double?, saturation: Double?
+    var curve: [Double]?, curve_r: [Double]?, curve_g: [Double]?, curve_b: [Double]?  // tone-curve points x0,y0,x1,y1,... in 0...1
+    var grade_shadows: [Double]?, grade_midtones: [Double]?, grade_highlights: [Double]?  // [hue 0...360, saturation 0...100, luminance]
+    var grade_balance: Double?
+    var sharpen: Double?, sharpen_radius: Double?, sharpen_masking: Double?  // amount 0...150, radius 0.5...3 px, masking 0...100
+    var denoise: Double?, denoise_color: Double?  // 0...100
+    var vignette: Double?, vignette_midpoint: Double?, vignette_feather: Double?, vignette_roundness: Double?
+    var grain: Double?, grain_size: Double?  // 0...100
+    var blur: Double?, blur_type: String?, blur_angle: Double?, blur_focus: Double?, blur_bokeh: Double?  // background blur
+    var crop: [Double]?, straighten: Double?, rotate: Double?, flip: Double?  // geometry: [x, y, w, h] in 0...1, degrees, 0/90/180/270, 1 = mirrored
+
+    /// Optional knobs where 0 means off.
+    static let zeroIsOff: [WritableKeyPath<Params, Double?>] = [\.plastic, \.lips, \.exposure, \.contrast, \.highlights, \.shadows,
+        \.whites, \.blacks, \.texture, \.clarity_all, \.vibrance, \.saturation, \.grade_balance, \.sharpen, \.denoise, \.denoise_color,
+        \.vignette, \.grain, \.blur]
+    /// Keys the app adds on top of flashgrade.py's look.
+    static let appKeys = ["strength", "plastic", "lips", "hsl_hue", "hsl_sat", "hsl_lum", "exposure", "contrast", "highlights", "shadows",
+        "whites", "blacks", "texture", "clarity_all", "vibrance", "saturation", "curve", "curve_r", "curve_g", "curve_b", "grade_shadows",
+        "grade_midtones", "grade_highlights", "grade_balance", "sharpen", "sharpen_radius", "sharpen_masking", "denoise", "denoise_color",
+        "vignette", "vignette_midpoint", "vignette_feather", "vignette_roundness", "grain", "grain_size", "blur", "blur_type", "blur_angle",
+        "blur_focus", "blur_bokeh", "crop", "straighten", "rotate", "flip"]
+
+    /// The edit at full strength with every "off" knob as nil. Geometry is left out: it's applied after the edit.
+    var look: Params {
         var q = self
         q.strength = nil
-        if q.plastic == 0 { q.plastic = nil }
-        if q.lips == 0 { q.lips = nil }
+        for kp in Params.zeroIsOff where q[keyPath: kp] == 0 { q[keyPath: kp] = nil }
         for kp in [\Params.hsl_hue, \.hsl_sat, \.hsl_lum] where q[keyPath: kp]?.allSatisfy({ $0 == 0 }) == true { q[keyPath: kp] = nil }
+        for kp in [\Params.curve, \.curve_r, \.curve_g, \.curve_b] where q[keyPath: kp] == [0, 0, 1, 1] { q[keyPath: kp] = nil }
+        for kp in [\Params.grade_shadows, \.grade_midtones, \.grade_highlights] where q[keyPath: kp].map({ $0.count == 3 && $0[1] == 0 && $0[2] == 0 }) == true {
+            q[keyPath: kp] = nil
+        }
+        if q.grade_shadows == nil && q.grade_midtones == nil && q.grade_highlights == nil { q.grade_balance = nil }
+        if q.blur == nil { (q.blur_type, q.blur_angle, q.blur_focus, q.blur_bokeh) = (nil, nil, nil, nil) }
+        if q.vignette == nil { (q.vignette_midpoint, q.vignette_feather, q.vignette_roundness) = (nil, nil, nil) }
+        if q.grain == nil { q.grain_size = nil }
+        if q.sharpen == nil { (q.sharpen_radius, q.sharpen_masking) = (nil, nil) }
+        (q.crop, q.straighten, q.rotate, q.flip) = (nil, nil, nil, nil)
         return q
     }
+
+    /// Only the flash look (flashgrade.py's keys); everything the app adds is dropped.
+    var flashLook: Params {
+        var d = dict
+        for k in Params.appKeys { d.removeValue(forKey: k) }
+        return try! JSONDecoder().decode(Params.self, from: JSONSerialization.data(withJSONObject: d))
+    }
+
+    var hasGeometry: Bool { (straighten ?? 0) != 0 || (rotate ?? 0) != 0 || (flip ?? 0) != 0 || (crop != nil && crop! != [0, 0, 1, 1]) }
 
     /// Keys missing from `json` keep their current value, so presets, saved edits and Claude's partial
     /// updates all go through here. Rejects wrong-length arrays, since the curves need exactly 8 steps.
@@ -40,8 +84,12 @@ struct Params: Codable, Equatable {
         d.merge(json) { $1 }
         let p = try JSONDecoder().decode(Params.self, from: JSONSerialization.data(withJSONObject: d))
         guard p.ambient.count == 8, p.flash.count == 8, p.fog_color.count == 3,
-              [p.hsl_hue, p.hsl_sat, p.hsl_lum].allSatisfy({ $0 == nil || $0!.count == 8 }) else {
-            throw NSError(domain: "FlashEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: "ambient/flash need 8 values, fog_color 3"])
+              [p.hsl_hue, p.hsl_sat, p.hsl_lum].allSatisfy({ $0 == nil || $0!.count == 8 }),
+              [p.curve, p.curve_r, p.curve_g, p.curve_b].allSatisfy({ $0 == nil || ($0!.count >= 4 && $0!.count % 2 == 0) }),
+              [p.grade_shadows, p.grade_midtones, p.grade_highlights].allSatisfy({ $0 == nil || $0!.count == 3 }),
+              p.crop == nil || p.crop!.count == 4 else {
+            throw NSError(domain: "FlashEdit", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "ambient/flash need 8 values, fog_color 3, hsl_* 8, curves x,y pairs, grade_* [hue, sat, lum], crop [x, y, w, h]"])
         }
         return p
     }
@@ -364,16 +412,25 @@ func edit(_ img: RGB, _ M: [Float], _ faces: [Face], bg: Params, fg: Params) -> 
     return edit(img, M, faces, bg).blend(edit(img, M, faces, fg), personMask(img, M))
 }
 
-/// Ambient exposure on the background, flash exposure on the person (like a real flash shot).
-func edit(_ img: RGB, _ M: [Float], _ faces: [Face], _ p: Params) -> RGB {
-    if p.look == Params() || p.strength ?? 1 <= 0 { return img }  // preset None: the photo as shot (skips even the face smoothing)
+/// The whole edit: the flash look (only when one is set), then the Lightroom-style develop stages (Develop.swift).
+/// Crop and straighten come after this, in `geometry`.
+func edit(_ img0: RGB, _ M: [Float], _ faces: [Face], _ p: Params) -> RGB {
+    if p.look == Params() || p.strength ?? 1 <= 0 { return img0 }  // preset None: the photo as shot (skips even the face smoothing)
     if let k = p.strength, k < 1 {  // Strength: fade between the photo and the full edit
-        let e = edit(img, M, faces, p.look), t = Float(k)
-        return img.map { i, r, g, b in (r + (e.r[i] - r) * t, g + (e.g[i] - g) * t, b + (e.b[i] - b) * t) }
+        let e = edit(img0, M, faces, p.look), t = Float(k)
+        return img0.map { i, r, g, b in (r + (e.r[i] - r) * t, g + (e.g[i] - g) * t, b + (e.b[i] - b) * t) }
     }
-    let (W, H, n) = (img.w, img.h, img.n), s = Double(min(H, W)) / 720  // parameters were fitted on ~720px photos
-    var x = dehaze(img, p.omega, s).map { _, r, g, b in (clip01(r), clip01(g), clip01(b)) }
+    let s = Double(min(img0.h, img0.w)) / 720  // parameters were fitted on ~720px photos
+    let img = denoise(img0, p, s)  // Detail > Noise reduction works on the photo itself (no-op when off)
     let Mr = personMask(img, M)
+    let x = p.flashLook == Params() ? img : flashGrade(img, faces, p, Mr, s)
+    return develop(x, img, Mr, faces, p, s)
+}
+
+/// Ambient exposure on the background, flash exposure on the person (like a real flash shot): flashgrade.py's `edit()`.
+func flashGrade(_ img: RGB, _ faces: [Face], _ p: Params, _ Mr: [Float], _ s: Double) -> RGB {
+    let (W, H, n) = (img.w, img.h, img.n)
+    var x = dehaze(img, p.omega, s).map { _, r, g, b in (clip01(r), clip01(g), clip01(b)) }
     // a real flash also reaches the scene just behind the person, so the edge fades instead of looking cut out
     let dist = edt(Mr.map { $0 >= 0.5 }, W, H), sp = Float(p.spill), fall = Float(60 * s)
     let Wf = fill(n) { Mr[$0] + (1 - Mr[$0]) * sp * expf(-dist[$0] / fall) }
@@ -397,11 +454,9 @@ func edit(_ img: RGB, _ M: [Float], _ faces: [Face], _ p: Params) -> RGB {
     if !faces.isEmpty {
         x = x.blend(labShift(x, Float(p.body_L ?? p.skin_L), Float(p.skin_a), Float(p.skin_b)), body)
     }
-    let swb = gauss(sw, W, H, 1.5 * s), plastic = Float(p.plastic ?? 0) / 100
-    var skin = plastic != 0 ? body : []  // all visible skin (body + faces), for Plastic shine
+    let swb = gauss(sw, W, H, 1.5 * s)
     for (f, fm) in zip(faces, fmasks) {
         let F = fill(n) { fm[$0] * swb[$0] }
-        if plastic != 0 { skin = fill(n) { min(1, skin[$0] + F[$0]) } }
         var lab = x.map { _, r, g, b in rgb2lab(r, g, b) }  // r,g,b planes hold L,a,b here
         if p.skin_contrast != 1 {  // keep the face's own shading (cheek/jaw shadows), scaled by skin_contrast
             let Lm = gauss(lab.r, W, H, Double(f.w) / 4), c = Float(p.skin_contrast)
@@ -411,9 +466,6 @@ func edit(_ img: RGB, _ M: [Float], _ faces: [Face], _ p: Params) -> RGB {
         let shifted = lab.map { _, L, a, b in lab2rgb(L + dL, a + da, b + db) }
         x = x.blend(skinSmooth(shifted, max(2, Int((Double(f.w) / 35).rounded(.toNearestOrEven)))), F)
     }
-    if plastic != 0 { x = plasticSkin(x, skin, plastic, s) }
-    if let t = p.lips, t != 0 { x = pinkLips(x, faces, Float(t / 100), s) }
-    if p.look.hsl_hue != nil || p.look.hsl_sat != nil || p.look.hsl_lum != nil { x = colorMixer(x, p) }
     return x.map { _, r, g, b in (clip01(r), clip01(g), clip01(b)) }
 }
 
@@ -632,8 +684,9 @@ func save(_ cg: CGImage, to url: URL) throws {
 }
 
 /// Full-resolution render, as `python flashgrade.py in out preset` does.
-func render(_ url: URL, bg: Params, fg: Params, label: String? = nil) throws -> (CGImage, Int) {
+/// `whole` carries the crop/straighten (defaults to `bg`).
+func render(_ url: URL, bg: Params, fg: Params, whole: Params? = nil, label: String? = nil) throws -> (CGImage, Int) {
     guard let cg = loadImage(url) else { throw CocoaError(.fileReadCorruptFile) }
     let (M, faces) = try analyze(cg)
-    return (cgImage(edit(rgb(cg), M, faces, bg: bg, fg: fg), label: label), faces.count)
+    return (cgImage(geometry(edit(rgb(cg), M, faces, bg: bg, fg: fg), whole ?? bg), label: label), faces.count)
 }

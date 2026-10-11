@@ -11,8 +11,10 @@ enum Entry {
             do {
                 let kv = a.dropFirst(5).map { $0.split(separator: "=", maxSplits: 1).map(String.init) }.filter { $0.count == 2 }
                 let p = try Params.preset(Int(a.count > 4 ? a[4] : "1") ?? 1)
-                    .merged(Dictionary(kv.map { ($0[0], $0[1].contains(",") ? $0[1].split(separator: ",").compactMap { Double($0) } as Any
-                                                             : Double($0[1]) ?? 0) }, uniquingKeysWith: { $1 }))
+                    .merged(Dictionary(kv.map { kv -> (String, Any) in  // numbers, comma lists, or text (blur_type=lens)
+                        let v = kv[1]
+                        return (kv[0], Double(v).map { $0 as Any } ?? (v.contains(",") ? v.split(separator: ",").compactMap { Double($0) } as Any : v))
+                    }, uniquingKeysWith: { $1 }))
                 let (cg, nf) = try render(URL(fileURLWithPath: a[2]), bg: p, fg: p, label: "claude")  // tagged like flashgrade.py's output, so parity.sh compares like for like
                 try save(cg, to: URL(fileURLWithPath: a[3]))
                 print("\(a[3]): \(nf) face(s)")
@@ -56,6 +58,24 @@ enum Entry {
             let px = colorMixer(RGB(w: 2, h: 1, r: [0.1, 0.9], g: [0.1, 0.1], b: [0.9, 0.1]), mp)
             check(abs(px.r[0] - px.b[0]) < 1e-4 && abs(px.g[0] - px.b[0]) < 1e-4, "blue must turn grey")
             check(abs(px.r[1] - 0.9) < 1e-4 && abs(px.g[1] - 0.1) < 1e-4, "red must stay")
+            // Develop: works on None without the flash look's face smoothing; exposure +1 doubles linear light
+            var ev = Params(); ev.exposure = 1
+            let lit = edit(img, M, faces, ev)
+            let mid = (0..<img.n).first { (0.2...0.35).contains(luma(img.r[$0], img.g[$0], img.b[$0])) }!
+            let y0 = luma(img.r[mid], img.g[mid], img.b[mid]), k = srgb(lin(y0) * 2) / y0
+            check(abs(lit.g[mid] - clip01(img.g[mid] * k)) < 1e-4, "exposure +1 must double linear light")
+            check(PointCurve([0, 0, 1, 1]) == nil && abs(PointCurve([0, 0, 0.5, 0.7, 1, 1])!(0.5) - 0.7) < 1e-3, "tone curve must pass its points")
+            var bl = Params(); bl.blur = 80; bl.blur_type = "lens"
+            let blurred = edit(img, M, faces, bl)
+            check(fgPx.allSatisfy { blurred.r[$0] == img.r[$0] } && bgPx.contains { blurred.r[$0] != img.r[$0] }, "blur must keep the person sharp")
+            var fl = Params(); fl.flip = 1
+            var r90 = Params(); r90.rotate = 90
+            var r270 = Params(); r270.rotate = 270
+            var quarterCrop = Params(); quarterCrop.crop = [0, 0, 0.5, 0.5]
+            let twice = geometry(geometry(img, fl), fl), turned = geometry(geometry(img, r90), r270), cropped = geometry(img, quarterCrop)
+            check(zip(twice.r, img.r).allSatisfy { abs($0 - $1) < 1e-5 }, "flip twice must give the photo back")
+            check(turned.w == img.w && zip(turned.g, img.g).allSatisfy { abs($0 - $1) < 1e-5 }, "90 then 270 must give the photo back")
+            check(cropped.w == (img.w + 1) / 2 || cropped.w == img.w / 2, "crop must size the output")
             print("selftest ok"); exit(0)
         }
         NSApplication.shared.setActivationPolicy(.regular)  // also behaves as an app under `swift run`
