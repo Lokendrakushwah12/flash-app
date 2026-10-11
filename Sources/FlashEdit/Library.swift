@@ -261,6 +261,7 @@ final class Preview {
     /// While editing the crop the whole straightened frame is shown, with the crop box drawn over it.
     var cropMode = false { didSet { if cropMode != oldValue, let last { show(last) } } }
     @ObservationIgnored var afterRGB: RGB?  // the latest result before crop, for Auto
+    var cropAspect: Double?  // the crop box's locked shape (width / height), nil = free
     @ObservationIgnored var previewWidth: CGFloat = 1
     /// Set while zoomed past the preview's pixels: renders again at up to 4096 px once edits settle.
     @ObservationIgnored var wantDetail = false { didSet { if wantDetail, !oldValue, let last { show(last) } } }
