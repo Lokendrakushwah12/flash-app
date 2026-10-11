@@ -22,16 +22,26 @@ Requires macOS 14 or later, Apple silicon or Intel.
 
 ## What it does
 
-- **Four looks** learned from reference edits, plus **None**, a **Strength** slider and your own **saved presets**.
+- **Flash looks**: four looks learned from reference edits, plus **None**, a **Strength** slider and your own **saved presets**.
 - **Isolate**: edit the whole photo, only the background or only the person (Apple Vision finds them).
+- **Light**: exposure, contrast, highlights, shadows, whites, blacks and **Auto**. **Presence**: texture, clarity, dehaze, vibrance, saturation.
+- **Tone Curve** you draw on (RGB, red, green, blue) over the histogram, **Color Mixer** (HSL for eight colours) and
+  **Color Grading** wheels for shadows, midtones and highlights.
+- **Blur** behind the person: lens with round bokeh, gaussian, motion, zoom and tilt-shift. The person stays sharp.
+- **Detail** (sharpening with masking, noise reduction) and **Effects** (vignette, grain, fog).
 - **Skin**: face and body tone, **plastic shine** (glossy ↔ matte) and **pink lips** (from Vision's lip outline).
-- **Color Mixer**: hue, saturation and luminance for eight colours, like Lightroom's HSL panel.
-- **Search** every adjustment (⌘F).
-- **Chat with Claude**: describe the edit ("darker background, warmer skin") and Claude changes the sliders. It never
-  touches pixels, so you can keep tweaking. Uses your local [Claude Code](https://claude.com/claude-code) CLI.
-- **Library like Lightroom**: every photo keeps its edit, chat, **versions** (⌘S) and **undo/redo** (⌘Z).
-- **Canvas**: before/after side by side, hold to compare, pinch to zoom, Space-drag to pan, Fit / 100%.
-- **Formats**: JPEG, PNG, **HEIC** and more in (drag from Finder or straight from Photos); full-resolution export as JPEG or HEIC.
+- **Crop**: aspect ratios, straighten, rotate, flip and a box you drag on the photo.
+- **Organised like Lightroom**: a histogram, Edit / Crop / Chat tabs, panels that fold away (a dot marks the ones with
+  edits) and **search** across every adjustment (⌘F).
+- **Chat with Claude**: describe the edit ("teal and orange grade, blur the background") and Claude changes the sliders.
+  It never touches pixels, so you can keep tweaking. Pick **Fable, Opus, Sonnet or Haiku**; it runs on your local
+  [Claude Code](https://claude.com/claude-code).
+- **Library**: every photo keeps its edit, chat, **versions** (⌘S) and **undo/redo** (⌘Z). Add the same photo as many
+  times as you like or make a **virtual copy** (⌘'), **copy and paste edits** between photos (⇧⌘C / ⇧⌘V), and **rate**
+  with 1–5 and filter by stars.
+- **Canvas**: before/after side by side or after only (⌘B), hold to compare, pinch to zoom, Space-drag to pan, Fit / 100%.
+- **Formats**: JPEG, PNG, **HEIC** and more in (drag from Finder or straight from Photos). Export as JPEG, HEIC, PNG or
+  TIFF at full size or smaller, with your camera info, date and location kept.
 
 ## Build from source
 
@@ -68,7 +78,8 @@ always points at the latest one. The icon is drawn by `swift scripts/make_icon.s
 ## Layout
 
 ```
-Sources/FlashEdit/   the app: Engine.swift (pipeline + Vision), Library.swift (catalog, presets, chat), App.swift (UI)
+Sources/FlashEdit/   Engine.swift (flash look + Vision), Develop.swift (Lightroom-style stages), Library.swift (catalog,
+                     presets, preview, chat), App.swift (window, library), Canvas.swift, Inspector.swift (panels)
 reference/           the Python prototype the engine is checked against
 scripts/             build.sh, parity.sh, make_icon.swift
 assets/              app icon
