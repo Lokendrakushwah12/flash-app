@@ -676,11 +676,46 @@ private func stamp(_ px: inout [UInt8], _ w: Int, _ h: Int, _ label: String) {
     }
 }
 
-func save(_ cg: CGImage, to url: URL) throws {
+/// Writes JPEG, HEIC, PNG or TIFF by extension. `metadataFrom` copies the original's EXIF/GPS (date taken, camera,
+/// location); the orientation is reset because the pixels are already upright.
+func save(_ cg: CGImage, to url: URL, quality: Double = 0.95, metadataFrom source: URL? = nil) throws {
     let type = (UTType(filenameExtension: url.pathExtension) ?? .jpeg).identifier as CFString
     guard let dst = CGImageDestinationCreateWithURL(url as CFURL, type, 1, nil) else { throw CocoaError(.fileWriteUnknown) }
-    CGImageDestinationAddImage(dst, cg, [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary)
+    var props: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
+    if let source, let src = CGImageSourceCreateWithURL(source as CFURL, nil),
+       let meta = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] {
+        for key in [kCGImagePropertyExifDictionary, kCGImagePropertyGPSDictionary, kCGImagePropertyIPTCDictionary] { props[key] = meta[key] }
+        if var tiff = meta[kCGImagePropertyTIFFDictionary] as? [CFString: Any] { tiff[kCGImagePropertyTIFFOrientation] = 1; props[kCGImagePropertyTIFFDictionary] = tiff }
+        props[kCGImagePropertyOrientation] = 1
+    }
+    CGImageDestinationAddImage(dst, cg, props as CFDictionary)
     guard CGImageDestinationFinalize(dst) else { throw CocoaError(.fileWriteUnknown) }
+}
+
+/// Shrinks so the long edge is at most `longEdge` pixels (0 = keep the full size).
+func resized(_ cg: CGImage, longEdge: Int) -> CGImage {
+    let side = max(cg.width, cg.height)
+    guard longEdge > 0, side > longEdge else { return cg }
+    let k = Double(longEdge) / Double(side), w = max(1, Int(Double(cg.width) * k)), h = max(1, Int(Double(cg.height) * k))
+    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    ctx.interpolationQuality = .high
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+    return ctx.makeImage() ?? cg
+}
+
+/// "iPhone 15 Pro · 24 mm f/1.8 · ISO 80 · 1/120 s", from the photo's EXIF (empty when there is none).
+func photoInfo(_ url: URL) -> String {
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return "" }
+    let exif = p[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:], tiff = p[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+    var parts: [String] = []
+    if let m = tiff[kCGImagePropertyTIFFModel] as? String { parts.append(m) }
+    if let f = exif[kCGImagePropertyExifFocalLenIn35mmFilm] as? Double ?? exif[kCGImagePropertyExifFocalLength] as? Double { parts.append("\(Int(f.rounded())) mm") }
+    if let a = exif[kCGImagePropertyExifFNumber] as? Double { parts.append(String(format: "f/%.1f", a)) }
+    if let iso = (exif[kCGImagePropertyExifISOSpeedRatings] as? [Int])?.first { parts.append("ISO \(iso)") }
+    if let t = exif[kCGImagePropertyExifExposureTime] as? Double, t > 0 { parts.append(t >= 1 ? String(format: "%.1f s", t) : "1/\(Int((1 / t).rounded())) s") }
+    return parts.joined(separator: " · ")
 }
 
 /// Full-resolution render, as `python flashgrade.py in out preset` does.

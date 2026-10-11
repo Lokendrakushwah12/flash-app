@@ -660,7 +660,7 @@ struct ChatPanel: View {
         let (before, after) = (preview.before, preview.after)
         Task {
             do {
-                let ans = try await Claude.ask(photo, region, before: before, after: after, q)
+                let ans = try await Claude.ask(photo, region, model: UserDefaults.standard.string(forKey: "chatModel") ?? "", before: before, after: after, q)
                 var ph = library.photos.first { $0.id == id } ?? photo
                 if let k = ans.preset { ph.setPreset(k, region) }
                 let params = try ph.params(for: region).merged(ans.params)
