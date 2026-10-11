@@ -6,15 +6,23 @@ import UniformTypeIdentifiers
 enum Entry {
     static func main() {
         let a = CommandLine.arguments
-        // FlashEdit render in.jpg out.jpg [preset 0-4] [key=value ...]: headless, like flashgrade.py (e.g. plastic=60 hsl_sat=0,0,0,0,0,-50,0,0)
+        // FlashEdit render in.jpg out.jpg [preset 0-4] [key=value ...]: headless, like flashgrade.py (e.g. plastic=60 hsl_sat=0,0,0,0,0,-50,0,0
+        // 'masks=[{"kind":"radial","shape":[0.5,0.4,0.2,0.25],"exposure":0.8}]'). Heal spots given as [x, y, r] are one brushed run: they
+        // share a source, picked the way the app picks one.
         if a.count >= 4, a[1] == "render" {
             do {
                 let kv = a.dropFirst(5).map { $0.split(separator: "=", maxSplits: 1).map(String.init) }.filter { $0.count == 2 }
-                let p = try Params.preset(Int(a.count > 4 ? a[4] : "1") ?? 1)
-                    .merged(Dictionary(kv.map { kv -> (String, Any) in  // numbers, comma lists, or text (blur_type=lens)
-                        let v = kv[1]
-                        return (kv[0], Double(v).map { $0 as Any } ?? (v.contains(",") ? v.split(separator: ",").compactMap { Double($0) } as Any : v))
-                    }, uniquingKeysWith: { $1 }))
+                var over = Dictionary(kv.map { kv -> (String, Any) in  // JSON (numbers, lists, masks), comma lists, or text (blur_type=lens)
+                    let v = kv[1]
+                    return (kv[0], (try? JSONSerialization.jsonObject(with: Data(v.utf8), options: .fragmentsAllowed))
+                        ?? (v.contains(",") ? v.split(separator: ",").compactMap { Double($0) } as Any : v))
+                }, uniquingKeysWith: { $1 })
+                if let spots = over["heal"] as? [[Double]], spots.contains(where: { $0.count == 3 }), let cg = loadImage(URL(fileURLWithPath: a[2])) {
+                    let (dx, dy) = healOffset(rgb(cg), spots.filter { $0.count == 3 })
+                    over["heal"] = spots.map { $0.count == 3 ? $0 + [$0[0] + dx, $0[1] + dy] : $0 }
+                    print("heal: \(over["heal"]!)")
+                }
+                let p = try Params.preset(Int(a.count > 4 ? a[4] : "1") ?? 1).merged(over)
                 let (cg, nf) = try render(URL(fileURLWithPath: a[2]), bg: p, fg: p, label: "claude")  // tagged like flashgrade.py's output, so parity.sh compares like for like
                 try save(cg, to: URL(fileURLWithPath: a[3]))
                 print("\(a[3]): \(nf) face(s)")
@@ -76,6 +84,49 @@ enum Entry {
             check(zip(twice.r, img.r).allSatisfy { abs($0 - $1) < 1e-5 }, "flip twice must give the photo back")
             check(turned.w == img.w && zip(turned.g, img.g).allSatisfy { abs($0 - $1) < 1e-5 }, "90 then 270 must give the photo back")
             check(cropped.w == (img.w + 1) / 2 || cropped.w == img.w / 2, "crop must size the output")
+            var tilted = Params(); (tilted.rotate, tilted.flip, tilted.straighten, tilted.crop) = (90, 1, 7, [0.1, 0.15, 0.7, 0.8])
+            let g = Geo(tilted, 300, 200)
+            check([(10, 20), (150, 100), (290, 5)].allSatisfy { (x: Float, y: Float) in
+                let (u, v) = g.output(x, y), (x2, y2) = g.source(u, v); return abs(x2 - x) < 1e-3 && abs(y2 - y) < 1e-3 }, "Geo.output must undo Geo.source")
+            // Heal: a dark dot on a left-to-right ramp, copied from a brighter patch to its right. The dot goes and the ramp
+            // carries on unbroken, because the copy is colour-matched to the spot's surroundings, not the source's.
+            let (hw, hh) = (200, 200), ramp = fill(hw * hh) { Float($0 % hw) / Float(hw - 1) * 0.6 + 0.2 }
+            var dotted = ramp
+            for i in dotted.indices where hypot(Float(i % hw) - 100, Float(i / hw) - 100) < 5 { dotted[i] = 0.05 }
+            let healed = heal(RGB(w: hw, h: hh, r: dotted, g: dotted, b: dotted), [[0.5, 0.5, 0.06, 0.65, 0.5]])
+            check(zip(healed.g, ramp).allSatisfy { abs($0 - $1) < 0.01 }, "heal must remove the dot and match the ramp")
+            check((0..<hw * hh).allSatisfy { hypot(Float($0 % hw) - 100, Float($0 / hw) - 100) < 13 || healed.r[$0] == dotted[$0] }, "heal must stay inside its circle")
+            // automatic source: off the spot, inside the photo, and not in the busy stripes on the right
+            let striped = fill(hw * hh) { i in i % hw > 125 ? Float((i % hw / 2) % 2) : (hypot(Float(i % hw) - 100, Float(i / hw) - 100) < 5 ? 0.05 : 0.5) }
+            let (odx, ody) = healOffset(RGB(w: hw, h: hh, r: striped, g: striped, b: striped), [[0.5, 0.5, 0.06]])
+            let (sx, sy) = (100 + odx * 200, 100 + ody * 200)
+            check(hypot(odx, ody) * 200 >= 24 && sx + 12 <= 125 && sx >= 12 && sy >= 12 && sy <= 188, "auto source must avoid the spot, the edges and the stripes (got \(sx), \(sy))")
+            var hp = Params(); hp.heal = [[0.3, 0.4, 0.03, 0.45, 0.4]]
+            let he = edit(img, M, faces, hp), (hcx, hcy, hr) = (Float(0.3 * Double(img.w)), Float(0.4 * Double(img.h)), Float(0.03 * Double(min(img.w, img.h))))
+            check((0..<img.n).allSatisfy { hypot(Float($0 % img.w) + 0.5 - hcx, Float($0 / img.w) + 0.5 - hcy) <= hr + 1 || he.g[$0] == img.g[$0] }
+                  && (0..<img.n).contains { he.g[$0] != img.g[$0] }, "a heal-only edit must change only its spot")
+            // Masks: radial works inside only, linear fades from full to none, a brush dab and its erase cancel out
+            let flat = RGB(w: 100, h: 100, r: fill(10_000) { _ in 0.3 }, g: fill(10_000) { _ in 0.3 }, b: fill(10_000) { _ in 0.3 })
+            var rm = Params(); rm.masks = [LocalMask(kind: .radial, shape: [0.5, 0.5, 0.2, 0.2], exposure: 1)]
+            let lr = localMasks(flat, rm, 1)
+            check(lr.g[5050] > 0.4 && lr.g[0] == 0.3, "radial mask must brighten its inside only")
+            rm.masks![0].invert = true
+            let li = localMasks(flat, rm, 1)
+            check(li.g[5050] == 0.3 && li.g[0] > 0.4, "inverted radial mask must brighten its outside only")
+            var lm = Params(); lm.masks = [LocalMask(kind: .linear, shape: [0.5, 0, 0.5, 1], exposure: 1, temp: 50)]
+            let ll = localMasks(flat, lm, 1)
+            check(ll.g[50] > ll.g[5050] && ll.g[5050] > ll.g[9950] && abs(ll.g[9950] - 0.3) < 1e-3 && ll.r[50] > ll.b[50], "linear mask must fade top to bottom")
+            let dab = LocalMask(kind: .brush, shape: [0.5, 0.5, 0.1]), erased = LocalMask(kind: .brush, shape: [0.5, 0.5, 0.1, 0.5, 0.5, -0.1])
+            check(maskPlane(dab, 100, 100)[5050] == 1 && maskPlane(dab, 100, 100)[0] == 0 && maskPlane(erased, 100, 100).allSatisfy { $0 < 1e-6 }, "brush dab and erase")
+            check((try? Params().merged(["heal": [[0.5, 0.5]]])) == nil && (try? Params().merged(["masks": [["kind": "lasso", "shape": []]]])) == nil
+                  && (try? Params().merged(["masks": [["kind": "radial", "shape": [0.5, 0.5, 0.2, 0.2], "exposure": 1]], "heal": [[0.5, 0.5, 0.05, 0.6, 0.5]]])) != nil,
+                  "heal and mask shapes must be checked")
+            var ph4 = Photo(path: "/x.png")
+            ph4.change(.background) { $0.fog = 0.2 }
+            ph4.change(.whole) { $0.masks = rm.masks; $0.heal = hp.heal }
+            check(ph4.bg?.masks == rm.masks && ph4.bg?.heal == hp.heal, "masks and spots must carry into isolated regions")
+            ph4.change(.whole) { $0.masks = nil; $0.heal = nil }
+            check(ph4.bg?.masks == nil && ph4.bg?.heal == nil && ph4.bg?.fog == 0.2, "clearing them on the whole photo must clear them in regions")
             print("selftest ok"); exit(0)
         }
         NSApplication.shared.setActivationPolicy(.regular)  // also behaves as an app under `swift run`

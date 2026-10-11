@@ -37,6 +37,8 @@ struct Params: Codable, Equatable {
     var grain: Double?, grain_size: Double?  // 0...100
     var blur: Double?, blur_type: String?, blur_angle: Double?, blur_focus: Double?, blur_bokeh: Double?  // background blur
     var crop: [Double]?, straighten: Double?, rotate: Double?, flip: Double?  // geometry: [x, y, w, h] in 0...1, degrees, 0/90/180/270, 1 = mirrored
+    var heal: [[Double]]?  // spot removal: [x, y, r, sx, sy] per spot (Develop.swift `heal`)
+    var masks: [LocalMask]?  // local adjustments: brush, linear and radial masks, each with its own settings
 
     /// Optional knobs where 0 means off.
     static let zeroIsOff: [WritableKeyPath<Params, Double?>] = [\.plastic, \.lips, \.exposure, \.contrast, \.highlights, \.shadows,
@@ -47,7 +49,7 @@ struct Params: Codable, Equatable {
         "whites", "blacks", "texture", "clarity_all", "vibrance", "saturation", "curve", "curve_r", "curve_g", "curve_b", "grade_shadows",
         "grade_midtones", "grade_highlights", "grade_balance", "sharpen", "sharpen_radius", "sharpen_masking", "denoise", "denoise_color",
         "vignette", "vignette_midpoint", "vignette_feather", "vignette_roundness", "grain", "grain_size", "blur", "blur_type", "blur_angle",
-        "blur_focus", "blur_bokeh", "crop", "straighten", "rotate", "flip"]
+        "blur_focus", "blur_bokeh", "crop", "straighten", "rotate", "flip", "heal", "masks"]
 
     /// The edit at full strength with every "off" knob as nil. Geometry is left out: it's applied after the edit.
     var look: Params {
@@ -64,6 +66,8 @@ struct Params: Codable, Equatable {
         if q.vignette == nil { (q.vignette_midpoint, q.vignette_feather, q.vignette_roundness) = (nil, nil, nil) }
         if q.grain == nil { q.grain_size = nil }
         if q.sharpen == nil { (q.sharpen_radius, q.sharpen_masking) = (nil, nil) }
+        if q.heal?.isEmpty == true { q.heal = nil }
+        if q.masks?.isEmpty == true { q.masks = nil }
         (q.crop, q.straighten, q.rotate, q.flip) = (nil, nil, nil, nil)
         return q
     }
@@ -87,9 +91,10 @@ struct Params: Codable, Equatable {
               [p.hsl_hue, p.hsl_sat, p.hsl_lum].allSatisfy({ $0 == nil || $0!.count == 8 }),
               [p.curve, p.curve_r, p.curve_g, p.curve_b].allSatisfy({ $0 == nil || ($0!.count >= 4 && $0!.count % 2 == 0) }),
               [p.grade_shadows, p.grade_midtones, p.grade_highlights].allSatisfy({ $0 == nil || $0!.count == 3 }),
-              p.crop == nil || p.crop!.count == 4 else {
+              p.crop == nil || p.crop!.count == 4, (p.heal ?? []).allSatisfy({ $0.count == 5 }), (p.masks ?? []).allSatisfy(\.isValid) else {
             throw NSError(domain: "FlashEdit", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                "ambient/flash need 8 values, fog_color 3, hsl_* 8, curves x,y pairs, grade_* [hue, sat, lum], crop [x, y, w, h]"])
+                "ambient/flash need 8 values, fog_color 3, hsl_* 8, curves x,y pairs, grade_* [hue, sat, lum], crop [x, y, w, h], " +
+                "heal spots [x, y, r, sx, sy], mask shapes: linear and radial 4 numbers, brush x, y, r triples"])
         }
         return p
     }
@@ -113,7 +118,9 @@ struct Params: Codable, Equatable {
     func carrying(from old: Params, to new: Params) -> Params {
         let o = old.dict
         var d = dict
-        for (k, v) in new.dict where (o[k] as? NSObject) != (v as? NSObject) {
+        let nd = new.dict
+        for k in o.keys where nd[k] == nil { d.removeValue(forKey: k) }  // switched off (nil) on the whole photo
+        for (k, v) in nd where (o[k] as? NSObject) != (v as? NSObject) {
             if let a = v as? Double, let b = o[k] as? Double, let c = d[k] as? Double { d[k] = c + a - b }
             else if let a = v as? [Double], let b = o[k] as? [Double], let c = d[k] as? [Double], a.count == c.count, b.count == c.count {
                 d[k] = (0..<c.count).map { c[$0] + a[$0] - b[$0] }
@@ -415,6 +422,7 @@ func edit(_ img: RGB, _ M: [Float], _ faces: [Face], bg: Params, fg: Params) -> 
 /// The whole edit: the flash look (only when one is set), then the Lightroom-style develop stages (Develop.swift).
 /// Crop and straighten come after this, in `geometry`.
 func edit(_ img0: RGB, _ M: [Float], _ faces: [Face], _ p: Params) -> RGB {
+    if let spots = p.heal { var q = p; q.heal = nil; return edit(heal(img0, spots), M, faces, q) }  // first, so Strength never fades it
     if p.look == Params() || p.strength ?? 1 <= 0 { return img0 }  // preset None: the photo as shot (skips even the face smoothing)
     if let k = p.strength, k < 1 {  // Strength: fade between the photo and the full edit
         let e = edit(img0, M, faces, p.look), t = Float(k)

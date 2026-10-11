@@ -3,12 +3,13 @@
 import Accelerate
 import Foundation
 
-/// Retouching, then Light, Tone Curve, Presence, Color Mixer, Color Grading, Blur, Detail and Effects.
+/// Retouching, then Light, Masks, Tone Curve, Presence, Color Mixer, Color Grading, Blur, Detail and Effects.
 func develop(_ x0: RGB, _ img: RGB, _ Mr: [Float], _ faces: [Face], _ p: Params, _ s: Double) -> RGB {
     var x = x0
     if let t = p.plastic, t != 0 { x = plasticSkin(x, skinMask(img, Mr, faces, s), Float(t / 100), s) }
     if let t = p.lips, t != 0 { x = pinkLips(x, faces, Float(t / 100), s) }
     x = light(x, p, s)
+    x = localMasks(x, p, s)
     x = toneCurves(x, p)
     x = presence(x, p, s)
     if p.look.hsl_hue != nil || p.look.hsl_sat != nil || p.look.hsl_lum != nil { x = colorMixer(x, p) }
@@ -362,29 +363,191 @@ func grain(_ x: RGB, _ p: Params, _ s: Double) -> RGB {
     }
 }
 
+// MARK: - Heal: spot removal
+
+/// Fills each spot [x, y, r, sx, sy] from its source patch: the source's texture plus a smooth colour offset that makes it
+/// match the spot's own surroundings at the edge (harmonic, so there is no seam), feathered over the outer third.
+/// x, y and sx, sy are fractions of the photo's width and height, r a fraction of its shorter side, all before crop and
+/// rotation, so a spot lands in the same place at any size. Spots apply in order, so later ones build on earlier ones.
+func heal(_ x: RGB, _ spots: [[Double]]) -> RGB {
+    var out = x
+    let (w, h) = (x.w, x.h), side = Double(min(w, h)), n = 32
+    for sp in spots where sp.count == 5 {
+        let cx = Float(sp[0] * Double(w)), cy = Float(sp[1] * Double(h)), R = Float(max(1.5, sp[2] * side))
+        let dx = Int(((sp[3] - sp[0]) * Double(w)).rounded()), dy = Int(((sp[4] - sp[1]) * Double(h)).rounded()), q = max(1, Int(R * 0.15))
+        func mean(_ px: Float, _ py: Float) -> SIMD3<Float> {  // average colour in a small box, clamped to the photo
+            let ix = min(max(Int(px), 0), w - 1), iy = min(max(Int(py), 0), h - 1)
+            var sum = SIMD3<Float>(), cnt: Float = 0
+            for y in max(0, iy - q)...min(h - 1, iy + q) {
+                for xx in max(0, ix - q)...min(w - 1, ix + q) { sum += SIMD3(out.r[y * w + xx], out.g[y * w + xx], out.b[y * w + xx]); cnt += 1 }
+            }
+            return sum / cnt
+        }
+        // the colour step between the spot's edge and the source's edge, at n points round the circle
+        let ring = (0..<n).map { k -> (x: Float, y: Float, d: SIMD3<Float>) in
+            let a = Float(k) * 2 * .pi / Float(n), bx = cx + R * cosf(a), by = cy + R * sinf(a)
+            return (bx, by, mean(bx, by) - mean(bx + Float(dx), by + Float(dy)))
+        }
+        let x0 = max(0, Int(cx - R)), x1 = min(w - 1, Int(cx + R)), y0 = max(0, Int(cy - R)), y1 = min(h - 1, Int(cy + R))
+        guard x0 <= x1, y0 <= y1 else { continue }
+        // the source patch is read before anything is written, since the two may overlap
+        let bw = x1 - x0 + 1
+        var patch = [SIMD3<Float>](repeating: .zero, count: bw * (y1 - y0 + 1))
+        for y in y0...y1 {
+            for xx in x0...x1 {
+                let j = min(max(y + dy, 0), h - 1) * w + min(max(xx + dx, 0), w - 1)
+                patch[(y - y0) * bw + xx - x0] = SIMD3(out.r[j], out.g[j], out.b[j])
+            }
+        }
+        for y in y0...y1 {
+            for xx in x0...x1 {
+                let px = Float(xx) + 0.5, py = Float(y) + 0.5, a = 1 - smoothstep(0.65 * R, R, hypot(px - cx, py - cy))
+                if a <= 0 { continue }
+                // Poisson kernel of the disc: weights 1/|p - b|² interpolate the edge steps harmonically
+                var d = SIMD3<Float>(), sw: Float = 0
+                for b in ring { let wt = 1 / max((px - b.x) * (px - b.x) + (py - b.y) * (py - b.y), 1e-3); d += wt * b.d; sw += wt }
+                let v = patch[(y - y0) * bw + xx - x0] + d / sw, i = y * w + xx
+                out.r[i] += (clip01(v.x) - out.r[i]) * a; out.g[i] += (clip01(v.y) - out.g[i]) * a; out.b[i] += (clip01(v.z) - out.b[i]) * a
+            }
+        }
+    }
+    return out
+}
+
+/// Where new spots copy from, like Lightroom's automatic source: of the nearby offsets that keep every copy inside the
+/// photo and off the spots, the one whose patch edges best match the spots' surroundings and whose inside looks most
+/// like them (no edges, no other blemishes). Spots are [x, y, r, ...]; returns the offset in fractions of width and height.
+func healOffset(_ x: RGB, _ spots: [[Double]]) -> (Double, Double) {
+    let (w, h) = (Double(x.w), Double(x.h)), side = min(w, h)
+    let c = spots.map { (x: $0[0] * w, y: $0[1] * h, r: max(1.5, $0[2] * side)) }
+    let R = c.map(\.r).max() ?? 1, angles = (0..<16).map { Double($0) * .pi / 8 }
+    func px(_ X: Double, _ Y: Double) -> SIMD3<Float> {
+        let i = min(max(Int(Y), 0), x.h - 1) * x.w + min(max(Int(X), 0), x.w - 1)
+        return SIMD3(x.r[i], x.g[i], x.b[i])
+    }
+    var best = (score: Double.infinity, dx: 2.5 * R, dy: 0.0)
+    for d in [2.2, 3.0, 4.2, 6.0] {
+        for a in angles {
+            let dx = d * R * cos(a), dy = d * R * sin(a)
+            var score = 0.0
+            for s in c {
+                let (sx, sy) = (s.x + dx, s.y + dy)
+                if sx < s.r || sy < s.r || sx + s.r > w || sy + s.r > h { score += 1e6 }  // outside the photo
+                if c.contains(where: { hypot(sx - $0.x, sy - $0.y) < s.r + $0.r }) { score += 1e6 }  // on a spot
+                var around = SIMD3<Float>(), edge = 0.0
+                for b in angles {  // the ring just outside the spot against the same ring round the source
+                    let t = px(s.x + 1.2 * s.r * cos(b), s.y + 1.2 * s.r * sin(b)), u = px(sx + 1.2 * s.r * cos(b), sy + 1.2 * s.r * sin(b))
+                    around += t; edge += Double(((t - u) * (t - u)).sum())
+                }
+                around /= 16
+                var inside = 0.0
+                for gy in -2...2 {  // the source's inside against the spot's surroundings
+                    for gx in -2...2 { let v = px(sx + Double(gx) * 0.35 * s.r, sy + Double(gy) * 0.35 * s.r) - around; inside += Double((v * v).sum()) }
+                }
+                score += edge / 16 + inside / 25
+            }
+            score *= 1 + 0.03 * d  // the nearer of two equal patches wins
+            if score < best.score { best = (score, dx, dy) }
+        }
+    }
+    return (best.dx / w, best.dy / h)
+}
+
+// MARK: - Masks: local adjustments
+
+enum MaskKind: String, Codable, CaseIterable { case brush, linear, radial }
+
+/// A local adjustment (Masks tab). Positions are fractions of the photo's width and height and sizes fractions of its
+/// shorter side, all before crop and rotation, so a mask lands in the same place at any size.
+struct LocalMask: Codable, Equatable {
+    var kind: MaskKind
+    /// brush: dabs x, y, r, x, y, r, ... in painting order (a negative r erases); linear: x0, y0 (full effect), x1, y1
+    /// (no effect); radial: cx, cy, rx, ry (the effect is inside)
+    var shape: [Double]
+    var feather: Double?  // 0...100, soft edge of brush dabs and radial masks (nil = 50)
+    var invert: Bool?
+    var exposure: Double?  // stops, -4...4
+    var contrast: Double?, highlights: Double?, shadows: Double?, temp: Double?, tint: Double?  // -100...100; tint + is magenta
+    var saturation: Double?, clarity: Double?, sharpness: Double?  // -100...100; negative sharpness softens
+
+    var isValid: Bool { kind == .brush ? shape.count % 3 == 0 : shape.count == 4 }
+}
+
+/// How much of the mask's adjustment each pixel gets, 0...1.
+func maskPlane(_ m: LocalMask, _ w: Int, _ h: Int) -> [Float] {
+    let (W, H, side) = (Float(w), Float(h), Float(min(w, h))), f = max(0.01, Float((m.feather ?? 50) / 100)), s = m.shape.map { Float($0) }
+    var out: [Float]
+    switch m.kind {
+    case .linear:
+        let x0 = s[0] * W, y0 = s[1] * H, dx = (s[2] - s[0]) * W, dy = (s[3] - s[1]) * H, len2 = max(dx * dx + dy * dy, 1e-6)
+        out = fill(w * h) { i in 1 - smoothstep(0, 1, ((Float(i % w) + 0.5 - x0) * dx + (Float(i / w) + 0.5 - y0) * dy) / len2) }
+    case .radial:
+        let cx = s[0] * W, cy = s[1] * H, rx = max(1, s[2] * side), ry = max(1, s[3] * side)
+        out = fill(w * h) { i in
+            let dx = (Float(i % w) + 0.5 - cx) / rx, dy = (Float(i / w) + 0.5 - cy) / ry
+            return 1 - smoothstep(1 - f, 1, (dx * dx + dy * dy).squareRoot())
+        }
+    case .brush:
+        out = [Float](repeating: 0, count: w * h)
+        for k in stride(from: 0, to: s.count - 2, by: 3) {
+            let cx = s[k] * W, cy = s[k + 1] * H, r = max(0.5, abs(s[k + 2]) * side), erase = s[k + 2] < 0
+            for y in stride(from: max(0, Int(cy - r)), through: min(h - 1, Int(cy + r)), by: 1) {
+                for x in stride(from: max(0, Int(cx - r)), through: min(w - 1, Int(cx + r)), by: 1) {
+                    let v = 1 - smoothstep(1 - f, 1, hypot(Float(x) + 0.5 - cx, Float(y) + 0.5 - cy) / r)
+                    out[y * w + x] = erase ? max(0, out[y * w + x] - v) : max(out[y * w + x], v)
+                }
+            }
+        }
+    }
+    return m.invert == true ? out.map { 1 - $0 } : out
+}
+
+/// Each mask's settings applied to the picture so far, blended in through the mask (in order, like Lightroom's list).
+func localMasks(_ x0: RGB, _ p: Params, _ s: Double) -> RGB {
+    var x = x0
+    for m in p.masks ?? [] where m.isValid {
+        var q = Params()
+        (q.exposure, q.contrast, q.highlights, q.shadows) = (m.exposure, m.contrast, m.highlights, m.shadows)
+        (q.saturation, q.clarity_all, q.sharpen) = (m.saturation, m.clarity, m.sharpness.map { max(0, $0) })
+        let temp = Float((m.temp ?? 0) / 100), tint = Float((m.tint ?? 0) / 100), soft = Float(-min(0, m.sharpness ?? 0) / 100)
+        if q.look == Params() && temp == 0 && tint == 0 && soft == 0 { continue }
+        var y = sharpen(presence(light(x, q, s), q, s), q, s)
+        if temp != 0 || tint != 0 {  // white balance in linear light, like the flash look's
+            y = y.map { _, r, g, b in (srgb(lin(r) * (1 + 0.3 * temp)), srgb(lin(g) * (1 - 0.25 * tint)), srgb(lin(b) * (1 - 0.3 * temp))) }
+        }
+        if soft > 0 {
+            let br = gauss(y.r, y.w, y.h, 2 * s), bg = gauss(y.g, y.w, y.h, 2 * s), bb = gauss(y.b, y.w, y.h, 2 * s)
+            y = y.map { i, r, g, b in (r + (br[i] - r) * soft, g + (bg[i] - g) * soft, b + (bb[i] - b) * soft) }
+        }
+        x = x.blend(y, maskPlane(m, x.w, x.h))
+    }
+    return x
+}
+
 // MARK: - Geometry: flip, quarter turns, straighten, crop
 
-/// Applied after the edit, to before and after alike. Straightening scales up just enough that no empty corners show.
-/// `crop: false` shows the whole straightened frame (for editing the crop box).
-func geometry(_ x: RGB, _ p: Params, crop useCrop: Bool = true) -> RGB {
-    let quarter = ((Int(((p.rotate ?? 0) / 90).rounded()) % 4) + 4) % 4, flip = (p.flip ?? 0) != 0
-    let theta = Float((p.straighten ?? 0) * .pi / 180), c = useCrop ? (p.crop ?? [0, 0, 1, 1]) : [0, 0, 1, 1]
-    if quarter == 0 && !flip && theta == 0 && c == [0, 0, 1, 1] { return x }
-    let (W, H) = quarter % 2 == 0 ? (Float(x.w), Float(x.h)) : (Float(x.h), Float(x.w))
-    let cs = cosf(abs(theta)), sn = sinf(abs(theta)), k = max((W * cs + H * sn) / W, (W * sn + H * cs) / H)
-    let ow = max(1, Int((c[2] * Double(W)).rounded())), oh = max(1, Int((c[3] * Double(H)).rounded()))
-    let ox = Float(c[0]) * W, oy = Float(c[1]) * H, (cx, cy) = (W / 2, H / 2), (ct, st) = (cosf(theta), sinf(theta))
-    let (sw, sh) = (Float(x.w), Float(x.h))
-    func sample(_ ch: [Float], _ px: Float, _ py: Float) -> Float {
-        let fx = min(max(px - 0.5, 0), sw - 1), fy = min(max(py - 0.5, 0), sh - 1)
-        let x0 = Int(fx), y0 = Int(fy), x1 = min(x0 + 1, x.w - 1), y1 = min(y0 + 1, x.h - 1), tx = fx - Float(x0), ty = fy - Float(y0)
-        let a = ch[y0 * x.w + x0] + (ch[y0 * x.w + x1] - ch[y0 * x.w + x0]) * tx, b = ch[y1 * x.w + x0] + (ch[y1 * x.w + x1] - ch[y1 * x.w + x0]) * tx
-        return a + (b - a) * ty
+/// Where `geometry` takes each output pixel from, and back: output pixels <-> photo pixels.
+/// Output pixel -> straightened frame -> turned-and-flipped frame -> original photo.
+struct Geo {
+    let sw: Float, sh: Float, W: Float, H: Float, quarter: Int, flip: Bool, k: Float, ct: Float, st: Float
+    let ox: Float, oy: Float, ow: Int, oh: Int, isIdentity: Bool
+
+    init(_ p: Params, _ w: Int, _ h: Int, crop useCrop: Bool = true) {
+        quarter = ((Int(((p.rotate ?? 0) / 90).rounded()) % 4) + 4) % 4; flip = (p.flip ?? 0) != 0
+        let theta = Float((p.straighten ?? 0) * .pi / 180), c = useCrop ? (p.crop ?? [0, 0, 1, 1]) : [0, 0, 1, 1]
+        isIdentity = quarter == 0 && !flip && theta == 0 && c == [0, 0, 1, 1]
+        (sw, sh) = (Float(w), Float(h))
+        (W, H) = quarter % 2 == 0 ? (sw, sh) : (sh, sw)
+        let cs = cosf(abs(theta)), sn = sinf(abs(theta))
+        k = max((W * cs + H * sn) / W, (W * sn + H * cs) / H)  // straightening scales up so no empty corners show
+        ow = max(1, Int((c[2] * Double(W)).rounded())); oh = max(1, Int((c[3] * Double(H)).rounded()))
+        ox = Float(c[0]) * W; oy = Float(c[1]) * H; (ct, st) = (cosf(theta), sinf(theta))
     }
-    // output pixel -> straightened frame -> turned-and-flipped frame -> original photo
-    func source(_ i: Int) -> (Float, Float) {
-        let X = ox + Float(i % ow) + 0.5 - cx, Y = oy + Float(i / ow) + 0.5 - cy
-        var fx = (X * ct + Y * st) / k + cx, fy = (-X * st + Y * ct) / k + cy
+
+    /// Output position (px) -> photo position (px).
+    func source(_ x: Float, _ y: Float) -> (Float, Float) {
+        let X = ox + x - W / 2, Y = oy + y - H / 2
+        var fx = (X * ct + Y * st) / k + W / 2, fy = (-X * st + Y * ct) / k + H / 2
         if flip { fx = W - fx }
         switch quarter {
         case 1: return (fy, sh - fx)
@@ -393,7 +556,35 @@ func geometry(_ x: RGB, _ p: Params, crop useCrop: Bool = true) -> RGB {
         default: return (fx, fy)
         }
     }
-    let src = fill(ow * oh) { Float(source($0).0) }, srcY = fill(ow * oh) { Float(source($0).1) }
+
+    /// Photo position (px) -> output position (px): `source` run backwards.
+    func output(_ px: Float, _ py: Float) -> (Float, Float) {
+        var (fx, fy): (Float, Float)
+        switch quarter {
+        case 1: (fx, fy) = (sh - py, px)
+        case 2: (fx, fy) = (sw - px, sh - py)
+        case 3: (fx, fy) = (py, sw - px)
+        default: (fx, fy) = (px, py)
+        }
+        if flip { fx = W - fx }
+        let u = (fx - W / 2) * k, v = (fy - H / 2) * k
+        return (u * ct - v * st + W / 2 - ox, u * st + v * ct + H / 2 - oy)
+    }
+}
+
+/// Applied after the edit, to before and after alike. Straightening scales up just enough that no empty corners show.
+/// `crop: false` shows the whole straightened frame (for editing the crop box).
+func geometry(_ x: RGB, _ p: Params, crop useCrop: Bool = true) -> RGB {
+    let g = Geo(p, x.w, x.h, crop: useCrop), (ow, oh) = (g.ow, g.oh)
+    if g.isIdentity { return x }
+    func sample(_ ch: [Float], _ px: Float, _ py: Float) -> Float {
+        let fx = min(max(px - 0.5, 0), g.sw - 1), fy = min(max(py - 0.5, 0), g.sh - 1)
+        let x0 = Int(fx), y0 = Int(fy), x1 = min(x0 + 1, x.w - 1), y1 = min(y0 + 1, x.h - 1), tx = fx - Float(x0), ty = fy - Float(y0)
+        let a = ch[y0 * x.w + x0] + (ch[y0 * x.w + x1] - ch[y0 * x.w + x0]) * tx, b = ch[y1 * x.w + x0] + (ch[y1 * x.w + x1] - ch[y1 * x.w + x0]) * tx
+        return a + (b - a) * ty
+    }
+    let src = fill(ow * oh) { g.source(Float($0 % ow) + 0.5, Float($0 / ow) + 0.5).0 }
+    let srcY = fill(ow * oh) { g.source(Float($0 % ow) + 0.5, Float($0 / ow) + 0.5).1 }
     func ch(_ c: [Float]) -> [Float] { fill(ow * oh) { sample(c, src[$0], srcY[$0]) } }
     return RGB(w: ow, h: oh, r: ch(x.r), g: ch(x.g), b: ch(x.b))
 }
