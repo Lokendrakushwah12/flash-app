@@ -31,7 +31,11 @@ Requires macOS 14 or later, Apple silicon or Intel.
 - **Detail** (sharpening with masking, noise reduction) and **Effects** (vignette, grain, fog).
 - **Skin**: face and body tone, **plastic shine** (glossy ↔ matte) and **pink lips** (from Vision's lip outline).
 - **Crop**: aspect ratios, straighten, rotate, flip and a box you drag on the photo.
-- **Organised like Lightroom**: a histogram, Edit / Crop / Chat tabs, panels that fold away (a dot marks the ones with
+- **Heal**: click a blemish, or drag over a longer one, and it's filled from a nearby patch (picked for you, movable),
+  colour-matched and feathered.
+- **Masks**: brush, linear and radial masks drawn on the photo, each with its own exposure, contrast, highlights,
+  shadows, temp, tint, saturation, clarity and sharpness. Invert, feather, paint and erase.
+- **Organised like Lightroom**: a histogram, Edit / Crop / Heal / Masks / Chat tabs, panels that fold away (a dot marks the ones with
   edits) and **search** across every adjustment (⌘F).
 - **Chat with Claude**: describe the edit ("teal and orange grade, blur the background") and Claude changes the sliders.
   It never touches pixels, so you can keep tweaking. Pick **Fable, Opus, Sonnet or Haiku**; it runs on your local
