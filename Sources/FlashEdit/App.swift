@@ -127,6 +127,17 @@ enum Entry {
             check(ph4.bg?.masks == rm.masks && ph4.bg?.heal == hp.heal, "masks and spots must carry into isolated regions")
             ph4.change(.whole) { $0.masks = nil; $0.heal = nil }
             check(ph4.bg?.masks == nil && ph4.bg?.heal == nil && ph4.bg?.fog == 0.2, "clearing them on the whole photo must clear them in regions")
+            var ph5 = Photo(path: "/x.png")
+            ph5.change(.background) { $0.fog = 0.3 }
+            ph5.change(.whole) { $0.crop = [0.1, 0.1, 0.8, 0.8]; $0.rotate = 90; $0.heal = hp.heal; $0.masks = rm.masks; $0.exposure = 1 }
+            ph5.setPreset(3, .whole)
+            check(ph5.params.crop == [0.1, 0.1, 0.8, 0.8] && ph5.params.rotate == 90 && ph5.params.heal == hp.heal && ph5.params.masks == rm.masks
+                  && ph5.params.exposure == nil, "a new preset must keep crop, heal and masks and replace the look")
+            ph5.change(.background) { $0.fog = 0.3 }
+            ph5.setPreset(1, .background)
+            check(ph5.bg?.masks == rm.masks && ph5.bg?.heal == hp.heal, "a preset on a region must keep its heal and masks")
+            ph5.setPreset(3, .whole, keepLocal: false)
+            check(ph5.params.crop == nil && ph5.params.heal == nil && ph5.params.masks == nil, "Reset All must clear them")
             check(isVideoFile(URL(fileURLWithPath: "/clip.MOV")) && isVideoFile(URL(fileURLWithPath: "/clip.mp4"))
                   && !isVideoFile(URL(fileURLWithPath: "/x.heic")), "videos must be told apart from photos")
             print("selftest ok"); exit(0)

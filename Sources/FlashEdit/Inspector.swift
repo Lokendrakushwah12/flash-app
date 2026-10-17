@@ -167,7 +167,7 @@ struct Adjustments: View {
                 if region == .whole {
                     Text((0...4).contains(photo.preset) ? Params.presetInfo[photo.preset].capitalizedFirst : "Your preset “\(photo.presetName)”")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Reset All to \(photo.presetName)") { photo.setPreset(photo.preset, .whole) }.disabled(!photo.isEdited)
+                    Button("Reset All to \(photo.presetName)") { photo.setPreset(photo.preset, .whole, keepLocal: false) }.disabled(!photo.isEdited)
                 } else {
                     Button("Match Whole Photo") { if region == .background { photo.bg = nil } else { photo.fg = nil } }
                         .disabled((region == .background ? photo.bg : photo.fg) == nil)

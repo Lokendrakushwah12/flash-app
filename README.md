@@ -22,7 +22,8 @@ Requires macOS 14 or later, Apple silicon or Intel.
 
 ## What it does
 
-- **Flash looks**: four looks learned from reference edits, plus **None**, a **Strength** slider and your own **saved presets**.
+- **Flash looks**: four looks learned from reference edits, plus **None**, a **Strength** slider and your own **saved presets**. Switching looks keeps your
+  crop, heal spots and masks (**Reset All** clears them).
 - **Isolate**: edit the whole photo, only the background or only the person (Apple Vision finds them).
 - **Light**: exposure, contrast, highlights, shadows, whites, blacks and **Auto**. **Presence**: texture, clarity, dehaze, vibrance, saturation.
 - **Tone Curve** you draw on (RGB, red, green, blue) over the histogram, **Color Mixer** (HSL for eight colours) and

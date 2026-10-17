@@ -79,6 +79,11 @@ struct Params: Codable, Equatable {
         return try! JSONDecoder().decode(Params.self, from: JSONSerialization.data(withJSONObject: d))
     }
 
+    /// The photo's own edits (crop and rotation, heal spots, masks): a new preset keeps them.
+    mutating func keepLocal(from o: Params) {
+        (crop, straighten, rotate, flip, heal, masks) = (o.crop, o.straighten, o.rotate, o.flip, o.heal, o.masks)
+    }
+
     var hasGeometry: Bool { (straighten ?? 0) != 0 || (rotate ?? 0) != 0 || (flip ?? 0) != 0 || (crop != nil && crop! != [0, 0, 1, 1]) }
 
     /// Keys missing from `json` keep their current value, so presets, saved edits and Claude's partial

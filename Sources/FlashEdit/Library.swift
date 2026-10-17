@@ -129,13 +129,19 @@ struct Photo: Codable, Identifiable, Equatable {
         }
     }
 
-    /// A preset on Whole starts over; on a region it gives just that region the preset's look for it.
-    mutating func setPreset(_ k: Int, _ r: Region) {
+    /// A preset on Whole starts the look over; on a region it gives just that region the preset's look for it.
+    /// The photo's own crop, heal spots and masks stay, unless `keepLocal` is false (Reset All).
+    mutating func setPreset(_ k: Int, _ r: Region, keepLocal: Bool = true) {
+        let old = self
         switch r {
         case .whole: state = Presets.shared.state(k)
         case .background: bg = Presets.shared.params(k, for: .background)
         case .person: fg = Presets.shared.params(k, for: .person)
         }
+        guard keepLocal else { return }
+        params.keepLocal(from: old.params)
+        bg?.keepLocal(from: old.params(for: .background))
+        fg?.keepLocal(from: old.params(for: .person))
     }
 }
 
@@ -366,7 +372,7 @@ enum Claude {
         Parameters:
         - preset 0-4: 0 leaves the photo untouched, 1-4 are starting looks learned from reference edits: \(Params.presetInfo.enumerated().map { "\($0) \($1)" }.joined(separator: "; ")). \
         The user's own saved presets (use the number as preset): \(Presets.shared.user.isEmpty ? "none yet" : Presets.shared.user.map { "\($0.id) \"\($0.name)\"" }.joined(separator: "; ")). \
-        Choosing a preset replaces all parameters.
+        Choosing a preset replaces all parameters except crop, straighten, rotate, flip, heal and masks, which the photo keeps.
         - ambient (background) and flash (person): 8 non-negative rises of a monotone luminance tone curve through 9 knots \
         (identity = 0.125 each, the running sum is capped at 1). Smaller total = darker. Bigger early rises lift shadows, \
         bigger late rises brighten highlights.
