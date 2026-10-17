@@ -420,13 +420,17 @@ struct MaskOverlay: View {
     }
 
     private func drawBrush(_ ctx: inout GraphicsContext, _ size: CGSize, _ m: LocalMask, _ brush: CGFloat) {
+        let f = max(0.01, (m.feather ?? 50) / 100)  // the soft outer part of each dab, as maskPlane renders it
         if preview.maskOverlay {
             let inv = m.invert == true
+            let soft = Gradient(stops: [.init(color: .red, location: 0), .init(color: .red, location: 1 - f),
+                                        .init(color: .red.opacity(0.5), location: 1 - f / 2), .init(color: .red.opacity(0), location: 1)])
             ctx.opacity = 0.4
             ctx.drawLayer { l in
                 func dab(_ c: CGPoint, _ r: CGFloat, erase: Bool) {
                     l.blendMode = erase != inv ? .destinationOut : .normal
-                    l.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(.red))
+                    l.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)),
+                           with: .radialGradient(soft, center: c, startRadius: 0, endRadius: r))
                 }
                 if inv { l.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.red)) }
                 for k in stride(from: 0, to: m.shape.count - 2, by: 3) {
@@ -436,7 +440,10 @@ struct MaskOverlay: View {
             }
             ctx.opacity = 1
         }
-        if let hover { ring(&ctx, hover, brush, width: 1, dash: preview.erasing ? [3, 3] : [], alpha: 0.9) }
+        if let hover {  // Lightroom's two circles: the brush, and where its feathered edge begins
+            ring(&ctx, hover, brush, width: 1, dash: preview.erasing ? [3, 3] : [], alpha: 0.9)
+            if f < 0.98 { ring(&ctx, hover, brush * (1 - f), width: 1, dash: [2, 3], alpha: 0.6) }
+        }
     }
 
     /// Lightroom's three lines: full effect, middle, no effect.
