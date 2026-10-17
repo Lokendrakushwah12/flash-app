@@ -608,8 +608,9 @@ func analyze(_ cg: CGImage) throws -> (mask: [Float], faces: [Face]) {
 
 // MARK: - I/O
 
-/// Loads an image upright. `maxSide` downsamples (for previews); nil = full resolution.
-func loadImage(_ url: URL, maxSide: Int? = nil) -> CGImage? {
+/// Loads an image upright. `maxSide` downsamples (for previews); nil = full resolution. For a video, the frame `time` seconds in.
+func loadImage(_ url: URL, maxSide: Int? = nil, at time: Double = 0) -> CGImage? {
+    if isVideoFile(url) { return videoFrame(url, at: time, maxSide: maxSide) }
     guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
           let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return nil }
     let side = max(props[kCGImagePropertyPixelWidth] as? Int ?? 0, props[kCGImagePropertyPixelHeight] as? Int ?? 0)
@@ -623,6 +624,7 @@ func loadImage(_ url: URL, maxSide: Int? = nil) -> CGImage? {
 
 /// Upright pixel size of the file, without decoding it.
 func imageSize(_ url: URL) -> CGSize? {
+    if isVideoFile(url) { return videoSize(url) }
     guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
           let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
           let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
@@ -714,6 +716,7 @@ func resized(_ cg: CGImage, longEdge: Int) -> CGImage {
 
 /// "iPhone 15 Pro · 24 mm f/1.8 · ISO 80 · 1/120 s", from the photo's EXIF (empty when there is none).
 func photoInfo(_ url: URL) -> String {
+    if isVideoFile(url) { return videoInfo(url) }
     guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
           let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return "" }
     let exif = p[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:], tiff = p[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]

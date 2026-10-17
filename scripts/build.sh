@@ -28,10 +28,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleDocumentTypes</key><array><dict>
-    <key>CFBundleTypeName</key><string>Image</string>
+    <key>CFBundleTypeName</key><string>Image or video</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>
     <key>LSHandlerRank</key><string>Alternate</string>
-    <key>LSItemContentTypes</key><array><string>public.image</string><string>public.heic</string><string>public.heif</string></array>
+    <key>LSItemContentTypes</key><array><string>public.image</string><string>public.heic</string><string>public.heif</string><string>public.movie</string></array>
   </dict></array>
 </dict></plist>
 PLIST

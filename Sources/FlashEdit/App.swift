@@ -127,6 +127,8 @@ enum Entry {
             check(ph4.bg?.masks == rm.masks && ph4.bg?.heal == hp.heal, "masks and spots must carry into isolated regions")
             ph4.change(.whole) { $0.masks = nil; $0.heal = nil }
             check(ph4.bg?.masks == nil && ph4.bg?.heal == nil && ph4.bg?.fog == 0.2, "clearing them on the whole photo must clear them in regions")
+            check(isVideoFile(URL(fileURLWithPath: "/clip.MOV")) && isVideoFile(URL(fileURLWithPath: "/clip.mp4"))
+                  && !isVideoFile(URL(fileURLWithPath: "/x.heic")), "videos must be told apart from photos")
             print("selftest ok"); exit(0)
         }
         NSApplication.shared.setActivationPolicy(.regular)  // also behaves as an app under `swift run`
@@ -189,27 +191,32 @@ struct ContentView: View {
         } detail: {
             if let photo = current {
                 HStack(spacing: 0) {
-                    CompareView(preview: preview, single: single, params: Binding(get: { current?.params ?? Params() }, set: { v in
-                        library.update(photo.id) { $0.change(.whole) { $0 = v } }
-                    }))
+                    VStack(spacing: 0) {
+                        CompareView(preview: preview, single: single, params: Binding(get: { current?.params ?? Params() }, set: { v in
+                            library.update(photo.id) { $0.change(.whole) { $0 = v } }
+                        }))
+                        if photo.isVideo { FrameScrubber(photo: photo) { t in library.update(photo.id) { $0.time = t } } }
+                    }
                     .id(photo.id)  // each photo opens fitted
                     Divider()
                     Inspector(id: photo.id, preview: preview).frame(width: 350).id(photo.id)
                 }
             } else {
-                ContentUnavailableView("Drop photos here", systemImage: "photo.on.rectangle.angled",
-                                       description: Text("Drag photos or a folder into this window, or click +. Every edit is saved automatically."))
+                ContentUnavailableView("Drop photos or videos here", systemImage: "photo.on.rectangle.angled",
+                                       description: Text("Drag photos, videos or a folder into this window, or click +. Every edit is saved automatically."))
             }
         }
-        .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in  // Finder files, or photos dragged from Photos/Safari
+        .onDrop(of: [.fileURL, .image, .movie], isTargeted: nil) { providers in  // Finder files, or photos and videos dragged from Photos/Safari
             Task { @MainActor in add(await droppedFiles(providers)) }
             return true
         }
         .onOpenURL { add([$0]) }  // Finder's Open With, or a photo dropped on the Dock icon
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.image, .heic, .heif, .folder], allowsMultipleSelection: true) {
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.image, .heic, .heif, .movie, .folder], allowsMultipleSelection: true) {
             if case .success(let urls) = $0 { add(urls) }
         }
-        .sheet(isPresented: $exportSheet) { ExportSheet(count: selection.count) { export($0) } }
+        .sheet(isPresented: $exportSheet) {
+            ExportSheet(count: selection.count, videos: library.photos.filter { selection.contains($0.id) && $0.isVideo }.count) { export($0) }
+        }
         .toolbar {
             ToolbarItemGroup {
                 if let cur = current {
@@ -224,10 +231,10 @@ struct ContentView: View {
                     Label(single ? "Before and After" : "After Only", systemImage: single ? "rectangle.split.2x1" : "rectangle")
                 }
                 .keyboardShortcut("b").help(single ? "Show before and after side by side (⌘B)" : "Show only the edit, larger (⌘B)")
-                Button { importing = true } label: { Label("Add Photos", systemImage: "plus") }
+                Button { importing = true } label: { Label("Add Photos or Videos", systemImage: "plus") }
                 Button { exportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
                     .disabled(selection.isEmpty || exporting != nil)
-                    .help("Export the selected photos at full resolution")
+                    .help("Export the selected photos and videos")
             }
         }
         .background {  // keyboard shortcuts for the library
@@ -240,6 +247,7 @@ struct ContentView: View {
         }
         .onChange(of: current?.id, initial: true) { preview.show(current) }
         .onChange(of: renderKey) { preview.show(current) }
+        .onChange(of: current?.time) { preview.show(current) }  // another frame of a video
         .onAppear {
             if selection.isEmpty, let first = library.photos.first { selection = [first.id] }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in  // 0-5 rate, like Lightroom
@@ -315,16 +323,25 @@ struct ContentView: View {
             var failed = [String](), used = Set<String>()
             for (k, p) in items.enumerated() {
                 exporting = "Exporting \(k + 1) of \(items.count)"
-                let ext = s.format != "original" ? s.format : ["heic", "heif"].contains(p.url.pathExtension.lowercased()) ? "heic" : "jpg"
+                let ext = p.isVideo ? "mov" : s.format != "original" ? s.format : ["heic", "heif"].contains(p.url.pathExtension.lowercased()) ? "heic" : "jpg"
                 var base = p.url.deletingPathExtension().lastPathComponent + (p.label.map { "_" + $0.replacingOccurrences(of: " ", with: "").lowercased() } ?? "") + s.suffix
                 while used.contains(base) { base += "_2" }  // two copies of one file never overwrite each other
                 used.insert(base)
                 let dst = dir.appending(path: "\(base).\(ext)")
                 do {
-                    try await Task.detached(priority: .userInitiated) {
-                        let cg = try render(p.url, bg: p.params(for: .background), fg: p.params(for: .person), whole: p.params).0
-                        try save(resized(cg, longEdge: s.longEdge), to: dst, quality: s.quality, metadataFrom: s.keepMetadata ? p.url : nil)
-                    }.value
+                    if p.isVideo {  // every frame through the pipeline: minutes, not seconds, so it reports how far it is
+                        let label = "Exporting \(k + 1) of \(items.count)"
+                        try await Task.detached(priority: .userInitiated) {
+                            try exportVideo(p, to: dst, longEdge: s.longEdge, hevc: s.videoCodec == "hevc", metadata: s.keepMetadata) { f in
+                                Task { @MainActor in if exporting != nil { exporting = "\(label) · \(Int(f * 100))%" } }
+                            }
+                        }.value
+                    } else {
+                        try await Task.detached(priority: .userInitiated) {
+                            let cg = try render(p.url, bg: p.params(for: .background), fg: p.params(for: .person), whole: p.params).0
+                            try save(resized(cg, longEdge: s.longEdge), to: dst, quality: s.quality, metadataFrom: s.keepMetadata ? p.url : nil)
+                        }.value
+                    }
                 } catch { failed.append("\(p.displayName): \(error.localizedDescription)") }
             }
             exporting = nil
@@ -343,6 +360,9 @@ struct PhotoRow: View {
                 if let thumb { Image(decorative: thumb, scale: 1).resizable().scaledToFill() } else { Color.secondary.opacity(0.2) }
             }
             .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(alignment: .bottomTrailing) {
+                if photo.isVideo { Image(systemName: "video.fill").font(.system(size: 9)).foregroundStyle(.white).shadow(radius: 1).padding(3) }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(photo.displayName).lineLimit(1).truncationMode(.middle)
                 HStack(spacing: 6) {
@@ -352,6 +372,34 @@ struct PhotoRow: View {
                 .font(.caption)
             }
         }
-        .task(id: photo.path) { let u = photo.url; thumb = await Task.detached { loadImage(u, maxSide: 128) }.value }
+        .task(id: "\(photo.path) \(photo.time ?? 0)") {
+            let (u, t) = (photo.url, photo.time ?? 0)
+            thumb = await Task.detached { loadImage(u, maxSide: 128, at: t) }.value
+        }
+    }
+}
+
+/// Videos: picks the frame the canvas shows and you edit on. The edit applies to every frame when you export.
+struct FrameScrubber: View {
+    let photo: Photo
+    let pick: (Double) -> Void
+    @State private var duration = 0.0
+    @State private var time = 0.0
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "film").foregroundStyle(.secondary)
+            Slider(value: $time, in: 0...max(duration, 0.01), onEditingChanged: { if !$0 { pick(time) } })
+            Text("\(timecode(time)) / \(timecode(duration))").monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(Color.black.opacity(0.85))
+        .environment(\.colorScheme, .dark)
+        .help("Pick the frame to preview and edit on. Export applies the edit to the whole video.")
+        .task(id: photo.id) {
+            let u = photo.url
+            time = photo.time ?? 0
+            duration = await Task.detached { videoDuration(u) }.value
+        }
     }
 }

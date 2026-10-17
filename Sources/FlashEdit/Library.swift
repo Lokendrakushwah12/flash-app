@@ -89,7 +89,9 @@ struct Photo: Codable, Identifiable, Equatable {
     var rating: Int?  // 1...5 stars
     var versions: [Version] = []
     var draft: EditState?  // the unsaved edit, set aside while you look at a saved version
+    var time: Double?  // videos: the frame shown while editing, in seconds (export edits every frame)
     var url: URL { URL(fileURLWithPath: path) }
+    var isVideo: Bool { isVideoFile(url) }
     var name: String { url.lastPathComponent }
     var displayName: String { label.map { "\(name) · \($0)" } ?? name }
     var presetName: String { Presets.shared.name(preset) }
@@ -138,7 +140,7 @@ struct Photo: Codable, Identifiable, Equatable {
 }
 
 extension Photo {
-    // Fields added later (bg, fg, chat, versions, draft, label, rating) may be missing from older catalogs.
+    // Fields added later (bg, fg, chat, versions, draft, label, rating, time) may be missing from older catalogs.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -152,11 +154,12 @@ extension Photo {
         draft = try c.decodeIfPresent(EditState.self, forKey: .draft)
         label = try c.decodeIfPresent(String.self, forKey: .label)
         rating = try c.decodeIfPresent(Int.self, forKey: .rating)
+        time = try c.decodeIfPresent(Double.self, forKey: .time)
     }
 }
 
-/// Dropped items: files from Finder keep their place on disk; photos dragged from Photos, Safari and other apps arrive
-/// as file promises (HEIC, JPEG, ...) whose temporary file is copied into Application Support/FlashEdit/Imported.
+/// Dropped items: files from Finder keep their place on disk; photos and videos dragged from Photos, Safari and other apps
+/// arrive as file promises (HEIC, JPEG, MOV, ...) whose temporary file is copied into Application Support/FlashEdit/Imported.
 func droppedFiles(_ providers: [NSItemProvider]) async -> [URL] {
     var out: [URL] = []
     for p in providers {
@@ -165,7 +168,7 @@ func droppedFiles(_ providers: [NSItemProvider]) async -> [URL] {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in c.resume(returning: url) }
             }
             if let u { out.append(u) }
-        } else if let type = p.registeredContentTypes.first(where: { $0.conforms(to: .image) }) {
+        } else if let type = p.registeredContentTypes.first(where: { $0.conforms(to: .image) || $0.conforms(to: .movie) }) {
             let u = await withCheckedContinuation { (c: CheckedContinuation<URL?, Never>) in
                 _ = p.loadFileRepresentation(for: type, openInPlace: false) { url, _, _ in
                     c.resume(returning: url.flatMap { src in
@@ -194,11 +197,12 @@ final class Library {
     // ponytail: rewrites the whole catalog on every change; a few KB per photo, move to SQLite past thousands of photos
     private func save() { try? JSONEncoder().encode(photos).write(to: Self.file, options: .atomic) }
 
-    /// Adds image files (folders are expanded one level). Adding a file that's already here makes another copy of it,
+    /// Adds image and video files (folders are expanded one level). Adding a file that's already here makes another copy of it,
     /// with its own edit. Returns the ids of the new photos.
     func add(_ urls: [URL]) -> [UUID] {
         let files = urls.flatMap { (try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)) ?? [$0] }
-            .filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }.sorted { $0.path < $1.path }
+            .filter { UTType(filenameExtension: $0.pathExtension).map { $0.conforms(to: .image) || $0.conforms(to: .movie) } == true }
+            .sorted { $0.path < $1.path }
         var new: [Photo] = []
         for f in files {
             var p = Photo(path: f.path)
@@ -275,11 +279,13 @@ final class Preview {
     var erasing = false  // the mask brush erases instead of painting
     var maskOverlay = true  // tint the selected brush mask red
     /// The shown photo as loaded (preview size): heal spots pick their source on it.
-    var photoRGB: RGB? { last.flatMap { sources[$0.id]?.rgb } }
+    var photoRGB: RGB? { last.flatMap { sources[Self.key($0)]?.rgb } }
 
     private struct Source { let rgb: RGB, mask: [Float], faces: [Face], original: CGSize, info: String }
-    @ObservationIgnored private var sources: [UUID: Source] = [:]
-    @ObservationIgnored private var detail: (id: UUID, src: Source)?  // one photo only: ~250 MB at 4096 px
+    @ObservationIgnored private var sources: [String: Source] = [:]
+    @ObservationIgnored private var detail: (key: String, src: Source)?  // one photo only: ~250 MB at 4096 px
+    /// A loaded photo, or one frame of a video.
+    private static func key(_ p: Photo) -> String { "\(p.id) \(p.time ?? 0)" }
     @ObservationIgnored private var pending: Photo?
     @ObservationIgnored private var last: Photo?
     @ObservationIgnored private var running = false
@@ -305,7 +311,7 @@ final class Preview {
     }
 
     private func render(_ p: Photo, detail full: Bool) async {
-        let cached = full ? (detail?.id == p.id ? detail?.src : nil) : sources[p.id]
+        let key = Self.key(p), cached = full ? (detail?.key == key ? detail?.src : nil) : sources[key]
         let crop = !cropMode
         let r = await Task.detached(priority: .userInitiated) { () -> Result<(Source, RGB, CGImage, CGImage, [[Float]]), Error> in
             Result {
@@ -318,9 +324,9 @@ final class Preview {
         }.value
         switch r {
         case .success(let (src, edited, beforeImg, img, hist)):
-            if full { detail = (p.id, src) } else {
+            if full { detail = (key, src) } else {
                 if sources.count > 8 { sources.removeAll() }  // ponytail: ~30 MB per cached photo, LRU if it matters
-                sources[p.id] = src
+                sources[key] = src
                 previewWidth = CGFloat(src.rgb.w)
             }
             if (pending?.id ?? p.id) == p.id {
@@ -332,7 +338,7 @@ final class Preview {
     }
 
     nonisolated private static func load(_ p: Photo, maxSide: Int) throws -> Source {
-        guard let cg = loadImage(p.url, maxSide: maxSide) else { throw CocoaError(.fileReadNoSuchFile) }
+        guard let cg = loadImage(p.url, maxSide: maxSide, at: p.time ?? 0) else { throw CocoaError(.fileReadNoSuchFile) }
         let (mask, faces) = try analyze(cg)
         return Source(rgb: rgb(cg), mask: mask, faces: faces, original: imageSize(p.url) ?? CGSize(width: cg.width, height: cg.height),
                       info: photoInfo(p.url))
@@ -355,6 +361,7 @@ enum Claude {
         You are the editing assistant inside FlashEdit, a Mac photo editor that gives photos a Meitu-style "flash" look: \
         darker ambient background, flash-lit person, neutral whites, skin tone and shading, optional fog behind the person. \
         You never edit pixels. You change the edit parameters and the app re-renders the photo deterministically.
+        \(photo.isVideo ? "This is a video: the images show one frame, and the same edit is applied to every frame when it's exported, so heal spots and masks stay put while things move. " : "")
 
         Parameters:
         - preset 0-4: 0 leaves the photo untouched, 1-4 are starting looks learned from reference edits: \(Params.presetInfo.enumerated().map { "\($0) \($1)" }.joined(separator: "; ")). \

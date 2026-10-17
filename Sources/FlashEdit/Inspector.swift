@@ -903,11 +903,12 @@ struct SavePresetSheet: View {
     }
 }
 
-struct ExportSettings { var format: String, quality: Double, longEdge: Int, keepMetadata: Bool, suffix: String }
+struct ExportSettings { var format: String, quality: Double, longEdge: Int, keepMetadata: Bool, suffix: String, videoCodec: String }
 
 /// Format, quality, size and metadata, remembered between exports.
 struct ExportSheet: View {
     let count: Int
+    var videos = 0  // how many of them are videos
     let onExport: (ExportSettings) -> Void
     @Environment(\.dismiss) private var dismiss
     @AppStorage("exportFormat") private var format = "original"
@@ -915,10 +916,12 @@ struct ExportSheet: View {
     @AppStorage("exportLongEdge") private var longEdge = 0
     @AppStorage("exportMetadata") private var keepMetadata = true
     @AppStorage("exportSuffix") private var suffix = "_flash"
+    @AppStorage("exportVideoCodec") private var videoCodec = "h264"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Export \(count) photo\(count == 1 ? "" : "s")").font(.headline)
+            Text(videos == 0 ? "Export \(count) photo\(count == 1 ? "" : "s")" : "Export \(count) item\(count == 1 ? "" : "s"), \(videos) video\(videos == 1 ? "" : "s")")
+                .font(.headline)
             Form {
                 Picker("Format", selection: $format) {
                     Text("Same as original (HEIC stays HEIC, others JPEG)").tag("original")
@@ -932,6 +935,13 @@ struct ExportSheet: View {
                 Picker("Size", selection: $longEdge) {
                     Text("Full resolution").tag(0); Text("Long edge 4096 px").tag(4096); Text("Long edge 2048 px").tag(2048); Text("Long edge 1080 px").tag(1080)
                 }
+                if videos > 0 {
+                    Picker("Video", selection: $videoCodec) {
+                        Text("H.264 (plays everywhere)").tag("h264"); Text("HEVC (smaller)").tag("hevc")
+                    }
+                    Text("Videos are saved as QuickTime movies with their sound. Every frame is edited, so a long clip at full resolution takes a while; a smaller size is much quicker.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Keep camera info, date and location", isOn: $keepMetadata)
                 TextField("Add to file names", text: $suffix)
             }
@@ -940,7 +950,8 @@ struct ExportSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Choose Folder…") {
-                    let s = ExportSettings(format: format, quality: quality, longEdge: longEdge, keepMetadata: keepMetadata, suffix: suffix)
+                    let s = ExportSettings(format: format, quality: quality, longEdge: longEdge, keepMetadata: keepMetadata, suffix: suffix,
+                                           videoCodec: videoCodec)
                     dismiss()
                     DispatchQueue.main.async { onExport(s) }
                 }
