@@ -181,7 +181,8 @@ enum BlurKind: String, CaseIterable { case lens, gaussian, motion, zoom, tiltshi
 
 /// The person stays sharp: the background is blurred as blur(colour × background) / blur(background), so the person
 /// never smears into it. Blurs run at reduced resolution (the radius shrinks with it), so big blurs stay fast.
-func backgroundBlur(_ x: RGB, _ Mr: [Float], _ p: Params, _ s: Double) -> RGB {
+/// `center` (pixels) overrides the person's centre for zoom blur and the tilt-shift band (masks blur around their own centre).
+func backgroundBlur(_ x: RGB, _ Mr: [Float], _ p: Params, _ s: Double, center: (Double, Double)? = nil) -> RGB {
     guard let amount = p.blur, amount > 0 else { return x }
     let kind = BlurKind(rawValue: p.blur_type ?? "lens") ?? .lens, (w, h, n) = (x.w, x.h, x.n)
     let radius = Float(amount / 100 * 28 * s), f = max(1, Int(radius / 6)), (sw, sh) = ((w + f - 1) / f, (h + f - 1) / f)
@@ -190,7 +191,7 @@ func backgroundBlur(_ x: RGB, _ Mr: [Float], _ p: Params, _ s: Double) -> RGB {
     // the person's centre, for zoom blur and the default tilt-shift band
     var (mx, my, mw) = (0.0, 0.0, 0.0)
     for i in stride(from: 0, to: n, by: 7) where Mr[i] > 0.5 { mx += Double(i % w); my += Double(i / w); mw += 1 }
-    let (cx, cy) = mw > 0 ? (mx / mw, my / mw) : (Double(w) / 2, Double(h) / 2)
+    let (cx, cy) = center ?? (mw > 0 ? (mx / mw, my / mw) : (Double(w) / 2, Double(h) / 2))
     let disc = discKernel(r), line = lineKernel(r * 1.6, Float((p.blur_angle ?? 0) * .pi / 180))
     let op: ([Float]) -> [Float] = { plane in
         switch kind {
@@ -462,15 +463,28 @@ enum MaskKind: String, Codable, CaseIterable { case brush, linear, radial }
 struct LocalMask: Codable, Equatable {
     var kind: MaskKind
     /// brush: dabs x, y, r, x, y, r, ... in painting order (a negative r erases); linear: x0, y0 (full effect), x1, y1
-    /// (no effect); radial: cx, cy, rx, ry (the effect is inside)
+    /// (no effect); radial: cx, cy, rx, ry and optionally its angle in degrees, clockwise (the effect is inside)
     var shape: [Double]
     var feather: Double?  // 0...100, soft edge of brush dabs and radial masks (nil = 50)
     var invert: Bool?
     var exposure: Double?  // stops, -4...4
     var contrast: Double?, highlights: Double?, shadows: Double?, temp: Double?, tint: Double?  // -100...100; tint + is magenta
     var saturation: Double?, clarity: Double?, sharpness: Double?  // -100...100; negative sharpness softens
+    var blur: Double?, blur_type: String?, blur_angle: Double?  // 0...100, a BlurKind (nil = lens), motion's direction
 
-    var isValid: Bool { kind == .brush ? shape.count % 3 == 0 : shape.count == 4 }
+    var isValid: Bool { kind == .brush ? shape.count % 3 == 0 : kind == .radial ? (4...5).contains(shape.count) : shape.count == 4 }
+    var angle: Double { kind == .radial && shape.count > 4 ? shape[4] : 0 }
+
+    /// Where the mask is centred, as fractions of the photo: zoom blur streaks towards it.
+    var center: (x: Double, y: Double) {
+        switch kind {
+        case .radial, .linear: return (shape[0], shape[1])
+        case .brush:
+            let dabs = stride(from: 0, to: shape.count - 2, by: 3).filter { shape[$0 + 2] > 0 }
+            guard !dabs.isEmpty else { return (0.5, 0.5) }
+            return (dabs.map { shape[$0] }.reduce(0, +) / Double(dabs.count), dabs.map { shape[$0 + 1] }.reduce(0, +) / Double(dabs.count))
+        }
+    }
 }
 
 /// How much of the mask's adjustment each pixel gets, 0...1.
@@ -483,8 +497,10 @@ func maskPlane(_ m: LocalMask, _ w: Int, _ h: Int) -> [Float] {
         out = fill(w * h) { i in 1 - smoothstep(0, 1, ((Float(i % w) + 0.5 - x0) * dx + (Float(i / w) + 0.5 - y0) * dy) / len2) }
     case .radial:
         let cx = s[0] * W, cy = s[1] * H, rx = max(1, s[2] * side), ry = max(1, s[3] * side)
+        let a = Float(m.angle * .pi / 180), (ca, sa) = (cosf(a), sinf(a))
         out = fill(w * h) { i in
-            let dx = (Float(i % w) + 0.5 - cx) / rx, dy = (Float(i / w) + 0.5 - cy) / ry
+            let X = Float(i % w) + 0.5 - cx, Y = Float(i / w) + 0.5 - cy
+            let dx = (X * ca + Y * sa) / rx, dy = (Y * ca - X * sa) / ry  // in the ellipse's own (turned) axes
             return 1 - smoothstep(1 - f, 1, (dx * dx + dy * dy).squareRoot())
         }
     case .brush:
@@ -510,7 +526,8 @@ func localMasks(_ x0: RGB, _ p: Params, _ s: Double) -> RGB {
         (q.exposure, q.contrast, q.highlights, q.shadows) = (m.exposure, m.contrast, m.highlights, m.shadows)
         (q.saturation, q.clarity_all, q.sharpen) = (m.saturation, m.clarity, m.sharpness.map { max(0, $0) })
         let temp = Float((m.temp ?? 0) / 100), tint = Float((m.tint ?? 0) / 100), soft = Float(-min(0, m.sharpness ?? 0) / 100)
-        if q.look == Params() && temp == 0 && tint == 0 && soft == 0 { continue }
+        let blur = m.blur ?? 0
+        if q.look == Params() && temp == 0 && tint == 0 && soft == 0 && blur <= 0 { continue }
         var y = sharpen(presence(light(x, q, s), q, s), q, s)
         if temp != 0 || tint != 0 {  // white balance in linear light, like the flash look's
             y = y.map { _, r, g, b in (srgb(lin(r) * (1 + 0.3 * temp)), srgb(lin(g) * (1 - 0.25 * tint)), srgb(lin(b) * (1 - 0.3 * temp))) }
@@ -518,6 +535,12 @@ func localMasks(_ x0: RGB, _ p: Params, _ s: Double) -> RGB {
         if soft > 0 {
             let br = gauss(y.r, y.w, y.h, 2 * s), bg = gauss(y.g, y.w, y.h, 2 * s), bb = gauss(y.b, y.w, y.h, 2 * s)
             y = y.map { i, r, g, b in (r + (br[i] - r) * soft, g + (bg[i] - g) * soft, b + (bb[i] - b) * soft) }
+        }
+        if blur > 0 {  // the same blurs as the background's, everywhere the mask reaches
+            var b = Params()
+            (b.blur, b.blur_type, b.blur_angle) = (blur, m.blur_type, m.blur_angle)
+            let c = m.center
+            y = backgroundBlur(y, [Float](repeating: 0, count: y.n), b, s, center: (c.x * Double(y.w), c.y * Double(y.h)))
         }
         x = x.blend(y, maskPlane(m, x.w, x.h))
     }

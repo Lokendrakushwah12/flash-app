@@ -415,10 +415,11 @@ enum Claude {
         patch centred at sx, sy (nearby, the same kind of surface, at least 2r away). The copy is colour-matched and feathered.
         - masks: local adjustments, applied after Light in list order, a list of objects {"kind": "linear" | "radial" | "brush", \
         "shape": [...], "feather": 0..100 (default 50), "invert": true/false, "exposure" (stops, -4..4), "contrast", "highlights", \
-        "shadows", "temp" (+ warmer), "tint" (+ magenta, - green), "saturation", "clarity", "sharpness" (-100..100, negative softens)}. \
+        "shadows", "temp" (+ warmer), "tint" (+ magenta, - green), "saturation", "clarity", "sharpness" (-100..100, negative softens), "blur" (0..100) with "blur_type" (lens, gaussian, motion, zoom, tiltshift) and \
+        "blur_angle" for motion}. \
         linear shape [x0, y0, x1, y1]: full effect at the first point fading to none at the second, e.g. a darker sky \
-        [0.5, 0, 0.5, 0.4] with exposure -0.8. radial shape [cx, cy, rx, ry]: inside the ellipse (invert for outside, e.g. a \
-        spotlight on the subject). brush shape: dabs [x, y, r, x, y, r, ...] (a negative r erases).
+        [0.5, 0, 0.5, 0.4] with exposure -0.8. radial shape [cx, cy, rx, ry, angle]: inside the ellipse, turned clockwise by angle \
+        degrees (optional; invert for outside, e.g. a spotlight on the subject). brush shape: dabs [x, y, r, x, y, r, ...] (a negative r erases).
 
         Isolate: \(region == .whole ? "the whole photo." : "the user is editing only the \(region.rawValue.lowercased()). Your changes apply only to the \(region.rawValue.lowercased()); the rest of the photo keeps its own edit, so parameters for the other region have no visible effect.")
         Current preset: \(photo.preset)

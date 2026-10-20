@@ -62,7 +62,7 @@ struct Adjustments: View {
         ("Hue", "hue shift", \.hsl_hue), ("Saturation", "saturation sat vibrance", \.hsl_sat), ("Luminance", "luminance lightness brightness", \.hsl_lum)]
     private static let curves: [(name: String, color: Color, kp: WritableKeyPath<Params, [Double]?>)] = [
         ("RGB", .white, \.curve), ("Red", .red, \.curve_r), ("Green", .green, \.curve_g), ("Blue", .blue, \.curve_b)]
-    private static let blurKinds: [(BlurKind, String)] = [(.lens, "Lens (bokeh)"), (.gaussian, "Gaussian"), (.motion, "Motion"),
+    static let blurKinds: [(BlurKind, String)] = [(.lens, "Lens (bokeh)"), (.gaussian, "Gaussian"), (.motion, "Motion"),
                                                           (.zoom, "Zoom"), (.tiltshift, "Tilt-shift")]
 
     private var p: Params { photo.params(for: region) }
@@ -739,8 +739,25 @@ struct MasksPanel: View {
                         ValueSlider(title: "Feather", value: Binding(get: { m.feather ?? 50 }, set: { v in edit(i) { $0.feather = abs(v - 50) < 1 ? nil : v.rounded() } }),
                                     range: 0...100, digits: 0)
                     }
+                    if m.kind == .radial {
+                        ValueSlider(title: "Angle", value: Binding(get: { m.angle }, set: { v in
+                            edit(i) { let d = v.rounded(); if $0.shape.count > 4 { $0.shape[4] = d } else { $0.shape.append(d) } }
+                        }), range: -180...180, digits: 0)
+                    }
                     Toggle("Invert", isOn: Binding(get: { m.invert == true }, set: { v in edit(i) { $0.invert = v ? true : nil } }))
                 } header: { Text(name(i)) }
+                Section {
+                    ValueSlider(title: "Amount", value: Binding(get: { m.blur ?? 0 }, set: { v in edit(i) { $0.blur = v < 1 ? nil : v.rounded() } }),
+                                range: 0...100, digits: 0)
+                    Picker("Type", selection: Binding(get: { BlurKind(rawValue: m.blur_type ?? "lens") ?? .lens },
+                                                      set: { k in edit(i) { $0.blur_type = k == .lens ? nil : k.rawValue } })) {
+                        ForEach(Adjustments.blurKinds, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    if m.blur_type == "motion" {
+                        ValueSlider(title: "Angle", value: Binding(get: { m.blur_angle ?? 0 }, set: { v in edit(i) { $0.blur_angle = v.rounded() } }),
+                                    range: -90...90, digits: 0)
+                    }
+                } header: { Text("Blur") }
                 Section {
                     ForEach(Self.settings, id: \.name) { st in
                         let exposure = st.name == "Exposure"

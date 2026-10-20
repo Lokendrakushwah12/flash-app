@@ -349,7 +349,8 @@ struct HealOverlay: View {
 }
 
 /// Masks tab: the selected mask on the photo. Brush: paint (or erase) over the photo, shown in red. Linear: drag the
-/// handle on either line, or anywhere else to move it. Radial: drag a handle on the edge to resize, anywhere else to move.
+/// handle on either line, or anywhere else to move it. Radial: drag a handle on the edge to resize, the one above it to
+/// rotate, anywhere else to move.
 struct MaskOverlay: View {
     @Binding var masks: [LocalMask]?
     let map: PhotoMap
@@ -395,15 +396,25 @@ struct MaskOverlay: View {
         masks = list
     }
 
-    /// Linear: the two points. Radial: the edge handles right, bottom, left, top.
+    /// Linear: the two points. Radial: the edge handles right, bottom, left, top (along its turned axes), then the rotate
+    /// handle just beyond the top one.
     private func handles(_ m: LocalMask) -> [CGPoint] {
         let s = m.shape
         switch m.kind {
         case .linear: return [map.view(s[0], s[1]), map.view(s[2], s[3])]
-        case .radial: return [map.view(s[0], s[1], plus: s[2], 0), map.view(s[0], s[1], plus: 0, s[3]),
-                              map.view(s[0], s[1], plus: -s[2], 0), map.view(s[0], s[1], plus: 0, -s[3])]
+        case .radial:
+            let a = m.angle, c = map.view(s[0], s[1]), top = radialPoint(s, a, 0, -s[3])
+            let d = max(hypot(top.x - c.x, top.y - c.y), 1)
+            return [radialPoint(s, a, s[2], 0), radialPoint(s, a, 0, s[3]), radialPoint(s, a, -s[2], 0), top,
+                    CGPoint(x: top.x + (top.x - c.x) / d * 24, y: top.y + (top.y - c.y) / d * 24)]
         case .brush: return []
         }
+    }
+
+    /// A point `(u, v)` along the radial mask's own (turned by `angle` degrees) axes, in fractions of the photo's shorter side.
+    private func radialPoint(_ s: [Double], _ angle: Double, _ u: Double, _ v: Double) -> CGPoint {
+        let a = angle * .pi / 180
+        return map.view(s[0], s[1], plus: u * cos(a) - v * sin(a), u * sin(a) + v * cos(a))
     }
 
     private func dragged(_ kind: MaskKind, _ h: Int, _ s0: [Double], _ v: DragGesture.Value) -> [Double] {
@@ -411,9 +422,14 @@ struct MaskOverlay: View {
         let d = map.delta(v.startLocation, v.location)
         switch (kind, h) {
         case (.linear, 0), (.linear, 1): s[2 * h] += d.x; s[2 * h + 1] += d.y
-        case (.radial, 0...3):
+        case (.radial, 0...3):  // resize along the ellipse's own axes
+            let u = map.units((s0[0], s0[1]), v.location), a = (s0.count > 4 ? s0[4] : 0) * .pi / 180
+            if h % 2 == 0 { s[2] = max(0.01, abs(u.x * cos(a) + u.y * sin(a))) } else { s[3] = max(0.01, abs(u.y * cos(a) - u.x * sin(a))) }
+        case (.radial, 4):  // rotate: the top handle follows the pointer, in whole degrees
             let u = map.units((s0[0], s0[1]), v.location)
-            if h % 2 == 0 { s[2] = max(0.01, abs(u.x)) } else { s[3] = max(0.01, abs(u.y)) }
+            var deg = (atan2(u.y, u.x) * 180 / .pi + 90).rounded()
+            if deg > 180 { deg -= 360 }
+            if s.count > 4 { s[4] = deg } else { s.append(deg) }
         default: s[0] += d.x; s[1] += d.y; if kind == .linear { s[2] += d.x; s[3] += d.y }
         }
         return s
@@ -462,14 +478,18 @@ struct MaskOverlay: View {
         for (k, dash) in [(1.0, [CGFloat]()), (1 - f, [4, 4])] where k > 0.02 {
             var p = Path()
             for t in 0...72 {
-                let a = Double(t) * .pi / 36, q = map.view(s[0], s[1], plus: s[2] * k * cos(a), s[3] * k * sin(a))
+                let a = Double(t) * .pi / 36, q = radialPoint(s, m.angle, s[2] * k * cos(a), s[3] * k * sin(a))
                 t == 0 ? p.move(to: q) : p.addLine(to: q)
             }
             ctx.stroke(p, with: .color(.black.opacity(0.45)), style: StrokeStyle(lineWidth: 2.5, dash: dash))
             ctx.stroke(p, with: .color(.white), style: StrokeStyle(lineWidth: 1, dash: dash))
         }
         handle(&ctx, map.view(s[0], s[1]), 4)
-        for h in handles(m) { handle(&ctx, h) }
+        let hs = handles(m)
+        line(&ctx, hs[3], hs[4], width: 1)
+        for h in hs.prefix(4) { handle(&ctx, h) }
+        ring(&ctx, hs[4], 5, width: 2)  // rotate
+        handle(&ctx, hs[4], 2.5)
     }
 }
 
