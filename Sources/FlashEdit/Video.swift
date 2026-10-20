@@ -157,6 +157,23 @@ func videoInfo(_ url: URL) -> String {
     return parts.joined(separator: " · ")
 }
 
+/// Draws the cut upright at the clip's real size. AVVideoComposition(propertiesOf:) on a composition keeps the stored
+/// (sideways) size, so a portrait phone video came out as its top part on a landscape frame.
+private func upright(_ comp: AVComposition, _ track: AVAssetTrack, _ src: AVAssetTrack) -> AVMutableVideoComposition {
+    let t = src.preferredTransform, box = CGRect(origin: .zero, size: src.naturalSize).applying(t)
+    let rate = src.nominalFrameRate > 0 ? src.nominalFrameRate : 30
+    let vc = AVMutableVideoComposition()
+    vc.renderSize = CGSize(width: abs(box.width).rounded(), height: abs(box.height).rounded())
+    vc.frameDuration = CMTime(value: 1, timescale: CMTimeScale(rate.rounded()))
+    let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+    layer.setTransform(t.concatenating(CGAffineTransform(translationX: -box.minX, y: -box.minY)), at: .zero)
+    let all = AVMutableVideoCompositionInstruction()
+    all.timeRange = CMTimeRange(start: .zero, duration: comp.duration)
+    all.layerInstructions = [layer]
+    vc.instructions = [all]
+    return vc
+}
+
 /// Renders every frame of the cut with its edit into a QuickTime movie (H.264 or HEVC) at `dst`, with the clip's sound and
 /// voice-overs mixed into AAC. `longEdge` (0 = full size) shrinks frames before editing, which also makes long clips much
 /// quicker. `metadata` keeps the date and location. `progress` gets 0...1.
@@ -171,7 +188,8 @@ func exportVideo(_ p: Photo, to dst: URL, longEdge: Int, hevc: Bool, metadata: B
     let reader = try AVAssetReader(asset: asset)
     let frames = AVAssetReaderVideoCompositionOutput(videoTracks: [track],
         videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-    frames.videoComposition = AVMutableVideoComposition(propertiesOf: asset)  // upright, like the preview
+    let srcTrack = source.tracks(withMediaType: .video).first ?? track
+    frames.videoComposition = upright(asset, track, srcTrack)
     reader.add(frames)
     guard reader.startReading() else { throw reader.error ?? fail("Can't read the video.") }
     // the sound (the clip's own and the voice-overs, mixed) has its own reader, so the slow video frames never hold it up
@@ -207,7 +225,7 @@ func exportVideo(_ p: Photo, to dst: URL, longEdge: Int, hevc: Bool, metadata: B
 
     // the first edited frame sets the size (crop and rotation change it); encoders want even sizes
     let (W, H) = (next.1.width & ~1, next.1.height & ~1)
-    let rate = source.tracks(withMediaType: .video).first?.nominalFrameRate ?? 0, fps = Double(rate > 0 ? rate : 30)
+    let rate = srcTrack.nominalFrameRate, fps = Double(rate > 0 ? rate : 30)
     try? FileManager.default.removeItem(at: dst)
     let writer = try AVAssetWriter(outputURL: dst, fileType: .mov)
     if metadata {  // date taken and location (QuickTime keys; an MP4's iTunes tags don't carry over)
