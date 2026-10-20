@@ -89,7 +89,8 @@ struct Photo: Codable, Identifiable, Equatable {
     var rating: Int?  // 1...5 stars
     var versions: [Version] = []
     var draft: EditState?  // the unsaved edit, set aside while you look at a saved version
-    var time: Double?  // videos: the frame shown while editing, in seconds (export edits every frame)
+    var time: Double?  // videos: the frame shown while editing, in source seconds (export edits every frame)
+    var timeline: Timeline?  // videos: the cut, layers and voice-overs (nil = the whole clip as shot)
     var url: URL { URL(fileURLWithPath: path) }
     var isVideo: Bool { isVideoFile(url) }
     var name: String { url.lastPathComponent }
@@ -146,7 +147,7 @@ struct Photo: Codable, Identifiable, Equatable {
 }
 
 extension Photo {
-    // Fields added later (bg, fg, chat, versions, draft, label, rating, time) may be missing from older catalogs.
+    // Fields added later (bg, fg, chat, versions, draft, label, rating, time, timeline) may be missing from older catalogs.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -161,6 +162,7 @@ extension Photo {
         label = try c.decodeIfPresent(String.self, forKey: .label)
         rating = try c.decodeIfPresent(Int.self, forKey: .rating)
         time = try c.decodeIfPresent(Double.self, forKey: .time)
+        timeline = try c.decodeIfPresent(Timeline.self, forKey: .timeline)
     }
 }
 
@@ -367,7 +369,7 @@ enum Claude {
         You are the editing assistant inside FlashEdit, a Mac photo editor that gives photos a Meitu-style "flash" look: \
         darker ambient background, flash-lit person, neutral whites, skin tone and shading, optional fog behind the person. \
         You never edit pixels. You change the edit parameters and the app re-renders the photo deterministically.
-        \(photo.isVideo ? "This is a video: the images show one frame, and the same edit is applied to every frame when it's exported, so heal spots and masks stay put while things move. " : "")
+        \(photo.isVideo ? "This is a video: the images show one frame, and the same edit is applied to every frame when it's exported, so heal spots and masks stay put while things move. Cuts, sound and voice-overs are edited on the app's timeline, not by you. " : "")
 
         Parameters:
         - preset 0-4: 0 leaves the photo untouched, 1-4 are starting looks learned from reference edits: \(Params.presetInfo.enumerated().map { "\($0) \($1)" }.joined(separator: "; ")). \

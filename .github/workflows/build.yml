@@ -1,0 +1,13 @@
+# Builds the app on every push and pull request, so a change that doesn't compile shows up before a release is tagged.
+name: Build
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Apple silicon)
+        run: swift build -c release --triple arm64-apple-macosx14.0

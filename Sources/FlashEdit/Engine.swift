@@ -735,9 +735,9 @@ func photoInfo(_ url: URL) -> String {
 }
 
 /// Full-resolution render, as `python flashgrade.py in out preset` does.
-/// `whole` carries the crop/straighten (defaults to `bg`).
-func render(_ url: URL, bg: Params, fg: Params, whole: Params? = nil, label: String? = nil) throws -> (CGImage, Int) {
-    guard let cg = loadImage(url) else { throw CocoaError(.fileReadCorruptFile) }
+/// `whole` carries the crop/straighten (defaults to `bg`). For a video, the frame `time` seconds in.
+func render(_ url: URL, bg: Params, fg: Params, whole: Params? = nil, label: String? = nil, at time: Double = 0) throws -> (CGImage, Int) {
+    guard let cg = loadImage(url, at: time) else { throw CocoaError(.fileReadCorruptFile) }
     let (M, faces) = try analyze(cg)
     return (cgImage(geometry(edit(rgb(cg), M, faces, bg: bg, fg: fg), whole ?? bg), label: label), faces.count)
 }

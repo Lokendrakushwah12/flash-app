@@ -45,9 +45,12 @@ Requires macOS 14 or later, Apple silicon or Intel.
   times as you like or make a **virtual copy** (⌘'), **copy and paste edits** between photos (⇧⌘C / ⇧⌘V), and **rate**
   with 1–5 and filter by stars.
 - **Canvas**: before/after side by side or after only (⌘B), hold to compare, pinch to zoom, Space-drag to pan, Fit / 100%.
-- **Video**: add MOV, MP4 and M4V clips like photos. Pick a frame to preview and edit on; export runs every frame through
-  the same edit (Vision finds the person again in each one) into a QuickTime movie, H.264 or HEVC, with the original
-  sound, date and location. A smaller export size makes long clips much quicker.
+- **Video**: add MOV, MP4 and M4V clips like photos. A **timeline** under the photo plays the cut and lets you scrub,
+  **trim** clips by dragging their edges, **split** at the playhead (⌘K), reorder and delete clips, **hide** the picture or
+  **mute** the clip's sound, and **record a voice-over** (or add a music file) with its own volume and mute. Pause anywhere
+  and the edited frame shows on the canvas, so every photo tool works on it; **Export Frame** saves it as a photo. Export
+  runs every frame of the cut through the same edit (Vision finds the person again in each one) into a QuickTime movie,
+  H.264 or HEVC, with all the sound mixed, plus the date and location. A smaller export size makes long clips much quicker.
 - **Formats**: JPEG, PNG, **HEIC** and more in (drag from Finder or straight from Photos). Export as JPEG, HEIC, PNG or
   TIFF at full size or smaller, with your camera info, date and location kept.
 
@@ -88,7 +91,7 @@ always points at the latest one. The icon is drawn by `swift scripts/make_icon.s
 ```
 Sources/FlashEdit/   Engine.swift (flash look + Vision), Develop.swift (Lightroom-style stages), Library.swift (catalog,
                      presets, preview, chat), App.swift (window, library), Canvas.swift, Inspector.swift (panels),
-                     Video.swift (frames, video export)
+                     Video.swift (frames, timeline model, video export), VideoEditor.swift (timeline, playback)
 reference/           the Python prototype the engine is checked against
 scripts/             build.sh, parity.sh, make_icon.swift
 assets/              app icon

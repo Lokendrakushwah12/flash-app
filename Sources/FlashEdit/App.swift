@@ -138,6 +138,12 @@ enum Entry {
             check(ph5.bg?.masks == rm.masks && ph5.bg?.heal == hp.heal, "a preset on a region must keep its heal and masks")
             ph5.setPreset(3, .whole, keepLocal: false)
             check(ph5.params.crop == nil && ph5.params.heal == nil && ph5.params.masks == nil, "Reset All must clear them")
+            var tl = Timeline.whole(10)
+            check(tl.split(at: 4) && !tl.split(at: 4.02) && tl.clips.count == 2 && tl.clips[1].start == 4, "split must cut the clip at the playhead")
+            tl.clips[0].start = 1  // trim 1 s off the front, then put the second part first
+            tl.clips.swapAt(0, 1)
+            check(tl.duration == 9 && tl.locate(0.5)!.source == 4.5 && tl.locate(7)!.source == 2 && tl.position(ofSource: 2) == 7
+                  && tl.position(ofSource: 0.5) == nil, "timeline must map its seconds to the source")
             check(isVideoFile(URL(fileURLWithPath: "/clip.MOV")) && isVideoFile(URL(fileURLWithPath: "/clip.mp4"))
                   && !isVideoFile(URL(fileURLWithPath: "/x.heic")), "videos must be told apart from photos")
             print("selftest ok"); exit(0)
@@ -202,11 +208,8 @@ struct ContentView: View {
         } detail: {
             if let photo = current {
                 HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        CompareView(preview: preview, single: single, params: Binding(get: { current?.params ?? Params() }, set: { v in
-                            library.update(photo.id) { $0.change(.whole) { $0 = v } }
-                        }))
-                        if photo.isVideo { FrameScrubber(photo: photo) { t in library.update(photo.id) { $0.time = t } } }
+                    Group {
+                        if photo.isVideo { VideoWorkspace(photo: photo) { canvas(photo) } } else { canvas(photo) }
                     }
                     .id(photo.id)  // each photo opens fitted
                     Divider()
@@ -270,6 +273,12 @@ struct ContentView: View {
         }
         .onDisappear { if let keyMonitor { NSEvent.removeMonitor(keyMonitor) } }
         .alert("FlashEdit", isPresented: Binding(get: { alert != nil }, set: { if !$0 { alert = nil } })) {} message: { Text(alert ?? "") }
+    }
+
+    private func canvas(_ photo: Photo) -> some View {
+        CompareView(preview: preview, single: single, params: Binding(get: { current?.params ?? Params() }, set: { v in
+            library.update(photo.id) { $0.change(.whole) { $0 = v } }
+        }))
     }
 
     /// Saved versions of the photo's edit: Save Version snapshots it, the menu switches between them.
@@ -386,31 +395,6 @@ struct PhotoRow: View {
         .task(id: "\(photo.path) \(photo.time ?? 0)") {
             let (u, t) = (photo.url, photo.time ?? 0)
             thumb = await Task.detached { loadImage(u, maxSide: 128, at: t) }.value
-        }
-    }
-}
-
-/// Videos: picks the frame the canvas shows and you edit on. The edit applies to every frame when you export.
-struct FrameScrubber: View {
-    let photo: Photo
-    let pick: (Double) -> Void
-    @State private var duration = 0.0
-    @State private var time = 0.0
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "film").foregroundStyle(.secondary)
-            Slider(value: $time, in: 0...max(duration, 0.01), onEditingChanged: { if !$0 { pick(time) } })
-            Text("\(timecode(time)) / \(timecode(duration))").monospacedDigit().foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(Color.black.opacity(0.85))
-        .environment(\.colorScheme, .dark)
-        .help("Pick the frame to preview and edit on. Export applies the edit to the whole video.")
-        .task(id: photo.id) {
-            let u = photo.url
-            time = photo.time ?? 0
-            duration = await Task.detached { videoDuration(u) }.value
         }
     }
 }
