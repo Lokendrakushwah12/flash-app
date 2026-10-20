@@ -3,7 +3,6 @@
 // Playback shows the cut as shot; whenever it stops, the canvas shows the edited frame at the playhead, so every photo
 // tool works on the frame you're looking at (and export applies the look to every frame).
 import AVFoundation
-import AVKit
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -45,6 +44,24 @@ final class Playback {
     }
 }
 
+/// The player's picture on a plain AVPlayerLayer (AVKit's SwiftUI VideoPlayer aborts in a SwiftPM-built app); the timeline
+/// has the controls.
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> NSView {
+        let layer = AVPlayerLayer(player: player)
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = NSColor.black.cgColor
+        let view = NSView()
+        view.layer = layer  // layer-hosting: the layer follows the view's size
+        view.wantsLayer = true
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { (view.layer as? AVPlayerLayer)?.player = player }
+}
+
 /// The canvas with the timeline under it, for a video.
 struct VideoWorkspace<Content: View>: View {
     let photo: Photo
@@ -84,7 +101,7 @@ struct VideoWorkspace<Content: View>: View {
             ZStack {
                 content.opacity(playback.playing ? 0 : 1)
                 if playback.playing {
-                    VideoPlayer(player: playback.player).overlay { if tl.videoHidden { Color.black } }
+                    PlayerView(player: playback.player).overlay { if tl.videoHidden { Color.black } }
                 }
             }
             .overlay(alignment: .bottomLeading) {
