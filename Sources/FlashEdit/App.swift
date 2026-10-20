@@ -116,10 +116,10 @@ enum Entry {
             var lm = Params(); lm.masks = [LocalMask(kind: .linear, shape: [0.5, 0, 0.5, 1], exposure: 1, temp: 50)]
             let ll = localMasks(flat, lm, 1)
             check(ll.g[50] > ll.g[5050] && ll.g[5050] > ll.g[9950] && abs(ll.g[9950] - 0.3) < 1e-3 && ll.r[50] > ll.b[50], "linear mask must fade top to bottom")
-            var turned = LocalMask(kind: .radial, shape: [0.5, 0.5, 0.4, 0.1, 90], exposure: 1)  // a tall ellipse once turned
-            check(maskPlane(turned, 100, 100)[40 * 100 + 50] > 0.9 && maskPlane(turned, 100, 100)[50 * 100 + 20] < 0.1, "radial mask must rotate")
-            (turned.blur, turned.exposure) = (80, nil)
-            var soft = Params(); soft.masks = [turned]
+            var tilted2 = LocalMask(kind: .radial, shape: [0.5, 0.5, 0.4, 0.1, 90], exposure: 1)  // a tall ellipse once turned
+            check(maskPlane(tilted2, 100, 100)[40 * 100 + 50] > 0.9 && maskPlane(tilted2, 100, 100)[50 * 100 + 20] < 0.1, "radial mask must rotate")
+            (tilted2.blur, tilted2.exposure) = (80, nil)
+            var soft = Params(); soft.masks = [tilted2]
             let stripes = RGB(w: 100, h: 100, r: fill(10_000) { Float(($0 % 100 / 4) % 2) }, g: fill(10_000) { Float(($0 % 100 / 4) % 2) },
                               b: fill(10_000) { Float(($0 % 100 / 4) % 2) })
             let bl2 = localMasks(stripes, soft, 1)
