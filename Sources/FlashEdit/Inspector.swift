@@ -918,32 +918,46 @@ struct ExportSheet: View {
     @AppStorage("exportSuffix") private var suffix = "_flash"
     @AppStorage("exportVideoCodec") private var videoCodec = "h264"
 
+    private var photos: Int { count - videos }
+    private var title: String {
+        func n(_ k: Int, _ word: String) -> String { "\(k) \(word)\(k == 1 ? "" : "s")" }
+        return "Export " + [photos > 0 ? n(photos, "photo") : nil, videos > 0 ? n(videos, "video") : nil].compactMap { $0 }.joined(separator: " and ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(videos == 0 ? "Export \(count) photo\(count == 1 ? "" : "s")" : "Export \(count) item\(count == 1 ? "" : "s"), \(videos) video\(videos == 1 ? "" : "s")")
-                .font(.headline)
+            Text(title).font(.headline)
             Form {
-                Picker("Format", selection: $format) {
-                    Text("Same as original (HEIC stays HEIC, others JPEG)").tag("original")
-                    Text("JPEG").tag("jpg"); Text("HEIC").tag("heic"); Text("PNG").tag("png"); Text("TIFF").tag("tiff")
-                }
-                if ["original", "jpg", "heic"].contains(format) {
-                    LabeledContent("Quality") {
-                        HStack { Slider(value: $quality, in: 0.5...1); Text("\(Int((quality * 100).rounded()))").monospacedDigit().frame(width: 30) }
-                    }
-                }
-                Picker("Size", selection: $longEdge) {
-                    Text("Full resolution").tag(0); Text("Long edge 4096 px").tag(4096); Text("Long edge 2048 px").tag(2048); Text("Long edge 1080 px").tag(1080)
+                if photos > 0 {
+                    Section {
+                        Picker("Format", selection: $format) {
+                            Text("Same as original (HEIC stays HEIC, others JPEG)").tag("original")
+                            Text("JPEG").tag("jpg"); Text("HEIC").tag("heic"); Text("PNG").tag("png"); Text("TIFF").tag("tiff")
+                        }
+                        if ["original", "jpg", "heic"].contains(format) {
+                            LabeledContent("Quality") {
+                                HStack { Slider(value: $quality, in: 0.5...1); Text("\(Int((quality * 100).rounded()))").monospacedDigit().frame(width: 30) }
+                            }
+                        }
+                    } header: { if videos > 0 { Text("Photos") } }
                 }
                 if videos > 0 {
-                    Picker("Video", selection: $videoCodec) {
-                        Text("H.264 (plays everywhere)").tag("h264"); Text("HEVC (smaller)").tag("hevc")
-                    }
-                    Text("Videos are saved as QuickTime movies with their sound. Every frame is edited, so a long clip at full resolution takes a while; a smaller size is much quicker.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Section {
+                        LabeledContent("Format", value: "QuickTime movie (.mov)")
+                        Picker("Codec", selection: $videoCodec) {
+                            Text("H.264 (plays everywhere)").tag("h264"); Text("HEVC (smaller)").tag("hevc")
+                        }
+                        Text("Saved with the cut and all the sound. Every frame is edited, so a long clip at full resolution takes a while; a smaller size is much quicker.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } header: { if photos > 0 { Text("Videos") } }
                 }
-                Toggle("Keep camera info, date and location", isOn: $keepMetadata)
-                TextField("Add to file names", text: $suffix)
+                Section {
+                    Picker("Size", selection: $longEdge) {
+                        Text("Full resolution").tag(0); Text("Long edge 4096 px").tag(4096); Text("Long edge 2048 px").tag(2048); Text("Long edge 1080 px").tag(1080)
+                    }
+                    Toggle("Keep camera info, date and location", isOn: $keepMetadata)
+                    TextField("Add to file names", text: $suffix)
+                }
             }
             .formStyle(.grouped)
             HStack {
